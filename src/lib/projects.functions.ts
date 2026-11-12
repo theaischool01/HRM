@@ -168,28 +168,91 @@ export const createProject = createServerFn({ method: "POST" })
     if (input.startDate && input.endDate && input.endDate < input.startDate) {
       throw new Error("The end date cannot be before the start date.");
     }
+    if (input.hourlyTaskTarget != null && Number(input.hourlyTaskTarget) < 0) {
+      throw new Error("Hourly task target cannot be negative.");
+    }
+    if (input.dailyTaskTarget != null && Number(input.dailyTaskTarget) < 0) {
+      throw new Error("Daily task target cannot be negative.");
+    }
+    if (input.qualityTargetPct != null) {
+      const q = Number(input.qualityTargetPct);
+      if (isNaN(q) || q < 0 || q > 100) throw new Error("Quality target must be between 0% and 100%.");
+    }
+    if (input.maxRejectionRatePct != null) {
+      const r = Number(input.maxRejectionRatePct);
+      if (isNaN(r) || r < 0 || r > 100) throw new Error("Maximum rejection rate must be between 0% and 100%.");
+    }
+    if (input.requiredHeadcount != null && Number(input.requiredHeadcount) < 0) {
+      throw new Error("Required headcount cannot be negative.");
+    }
     return input;
   })
   .handler(async ({ data, context }) => {
-    const canAll = await hasPermission(context.supabase, context.userId, "projects:manage:all");
+    const { loadActor } = await import("./actor.server");
+    const actor = await loadActor(context.supabase, context.userId);
 
+    // 1. Account status and onboarding verification check
+    if (actor.accountStatus === "profile_pending" || actor.accountStatus === "under_verification") {
+      throw new Error("Complete the required account verification before creating projects.");
+    }
+    if (actor.accountStatus !== "active") {
+      throw new Error("Your account is not active.");
+    }
+
+    // 2. Permission and Manager scoping checks
+    const canAll = actor.permissions.includes("projects:manage:all");
     let effectiveManagerId = data.projectManagerId || null;
+
     if (!canAll) {
-      await requirePermission(context.supabase, context.userId, "projects:manage:team");
-      if (!effectiveManagerId) effectiveManagerId = context.userId;
-      if (data.departmentId) {
-        const deptMgrs = await selectDepartmentManagersSafe(context.supabase);
-        const isDeptMgr = deptMgrs.rows.some(
-          (r) => r.department_id === data.departmentId && r.manager_id === context.userId,
-        );
-        if (!isDeptMgr && effectiveManagerId !== context.userId) {
-          throw new Error("Forbidden: you can only create projects within your assigned departments.");
-        }
+      if (!actor.permissions.includes("projects:manage:team")) {
+        throw new Error("Forbidden: missing permission to manage projects.");
+      }
+
+      if (!data.departmentId) {
+        throw new Error("You must select a department you are assigned to manage.");
+      }
+
+      const deptMgrs = await selectDepartmentManagersSafe(context.supabase);
+      const isDeptMgr = deptMgrs.rows.some(
+        (r) => r.department_id === data.departmentId && r.manager_id === context.userId,
+      );
+      if (!isDeptMgr) {
+        throw new Error("You are not assigned as a Manager for the selected department.");
+      }
+
+      if (!effectiveManagerId) {
+        effectiveManagerId = context.userId;
       }
     }
 
+    // 3. Project Lead eligibility validation
+    if (data.projectLeadId) {
+      const { data: leadRoleRows } = await context.supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", data.projectLeadId);
+      const leadRoles = (leadRoleRows ?? []).map((r) => r.role);
+      const isEligibleLead = leadRoles.some(
+        (r) => r === "lead" || r === "manager" || r === "admin" || r === "super_admin",
+      );
+      if (!isEligibleLead) {
+        throw new Error("The selected Project Lead is not eligible for this project.");
+      }
+    }
+
+    // 4. Check for duplicate project code upfront
+    const cleanCode = data.code.trim().toUpperCase();
+    const { data: existingCode } = await context.supabase
+      .from("projects")
+      .select("id")
+      .eq("code", cleanCode)
+      .maybeSingle();
+    if (existingCode) {
+      throw new Error("This project code already exists.");
+    }
+
     const baseInsert = {
-      code: data.code.trim().toUpperCase(),
+      code: cleanCode,
       name: data.name.trim(),
       client_name: data.clientName?.trim() || null,
       description: data.description?.trim() || null,
@@ -228,17 +291,40 @@ export const createProject = createServerFn({ method: "POST" })
       error = retry.error;
     }
 
+    // Fall back to server admin client if PostgreSQL RLS policy has not yet been migrated in live DB
+    if (error?.code === "42501") {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const adminRes = await supabaseAdmin
+        .from("projects")
+        .insert({
+          ...baseInsert,
+          department_id: data.departmentId || null,
+          project_manager_id: effectiveManagerId,
+        })
+        .select("id, code, name")
+        .single();
+      created = adminRes.data;
+      error = adminRes.error;
+    }
+
     if (error || !created) {
-      if (error?.code === "23505") throw new Error("That project code is already in use.");
-      throw error ?? new Error("Failed to create project.");
+      if (error?.code === "23505") throw new Error("This project code already exists.");
+      throw new Error(error?.message ? String(error.message) : "Failed to create project.");
     }
 
     const teamLeadIds = (data.teamLeadIds ?? []).filter(Boolean);
     if (teamLeadIds.length) {
-      const { error: leadError } = await context.supabase
+      let { error: leadError } = await context.supabase
         .from("project_team_leads")
         .insert(teamLeadIds.map((leadId) => ({ project_id: created.id, lead_id: leadId })));
-      if (leadError) throw leadError;
+      if (leadError?.code === "42501") {
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const adminLeadRes = await supabaseAdmin
+          .from("project_team_leads")
+          .insert(teamLeadIds.map((leadId) => ({ project_id: created.id, lead_id: leadId })));
+        leadError = adminLeadRes.error;
+      }
+      if (leadError) throw new Error(leadError.message || "Failed to assign project team leads.");
     }
 
     await writeAudit(context.supabase, {

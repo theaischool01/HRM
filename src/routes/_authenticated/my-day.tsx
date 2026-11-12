@@ -19,7 +19,7 @@ import {
 import { DAY_SLOTS, slotKeyOf, slotRange, type DaySlot } from "@/lib/slots";
 import { readBrowserPosition, requiresLocation } from "@/lib/geo";
 import { AppShell } from "@/components/app-shell";
-import { actorQueryOptions } from "@/hooks/use-actor";
+import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { ATTENDANCE_STATUS_LABELS } from "@/lib/daily.server";
 import {
@@ -148,6 +148,10 @@ function localInput(date: Date) {
 }
 
 function MyDayPage() {
+  const actor = useActor();
+  const isManagementRole = actor.roles.some(
+    (r) => r === "manager" || r === "admin" || r === "super_admin" || r === "hr",
+  );
   const queryClient = useQueryClient();
   const { data: day } = useSuspenseQuery({
     queryKey: ["my-day"],
@@ -382,11 +386,13 @@ function MyDayPage() {
               <AlarmClock className="size-4" /> Attendance
             </CardTitle>
             <CardDescription>
-              Check-in is only open for assignments you have acknowledged.
+              {isManagementRole
+                ? "Personal workday attendance and break tracking."
+                : "Check-in is only open for assignments you have acknowledged."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {allocations.length === 0 && (
+            {allocations.length === 0 && !isManagementRole && (
               <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                 No active, acknowledged assignment today — work logging is closed. Acknowledge an
                 assignment on{" "}
@@ -395,6 +401,12 @@ function MyDayPage() {
                 </Link>{" "}
                 to unlock check-in.
               </p>
+            )}
+            {allocations.length === 0 && isManagementRole && (
+              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Manager Attendance Mode:</span> Personal
+                presence tracking. Project task targets are not required for personal check-in.
+              </div>
             )}
             {!checkedIn ? (
               <div className="space-y-3">
@@ -434,7 +446,7 @@ function MyDayPage() {
                 </div>
                 <Button
                   className="w-full"
-                  disabled={busy === "check-in" || allocations.length === 0}
+                  disabled={busy === "check-in" || (allocations.length === 0 && !isManagementRole)}
                   onClick={doCheckIn}
                 >
                   <LogIn className="size-4" /> Check in
@@ -503,11 +515,21 @@ function MyDayPage() {
           <CardHeader>
             <CardTitle className="text-base">Hourly task entries</CardTitle>
             <CardDescription>
-              One row per hour of the working day (9:00–6:00). Fill the slots you worked;
-              breaks and blockers are logged separately. Approved slots lock.
+              {isManagementRole && allocations.length === 0
+                ? "Hourly task logging is tied to client project allocations. Use the Manager Dashboard and Oversight to manage team deliverables."
+                : "One row per hour of the working day (9:00–6:00). Fill the slots you worked; breaks and blockers are logged separately. Approved slots lock."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {allocations.length === 0 && isManagementRole ? (
+              <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">No Project Task Logging Required</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  You are not allocated to client task units. Your attendance and breaks are tracked above.
+                  Use the Manager Dashboard and Oversight to manage team deliverables and projects.
+                </p>
+              </div>
+            ) : (
             <div className="overflow-hidden rounded-lg border">
               <div className="hidden grid-cols-[7.5rem_5.5rem_5.5rem_1fr_auto] gap-2 border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground sm:grid">
                 <span>Time slot</span>
@@ -684,6 +706,7 @@ function MyDayPage() {
                 );
               })}
             </div>
+            )}
 
             <div className="rounded-lg border">
               <button

@@ -126,13 +126,16 @@ export function evaluateWfoGeofence(
 /**
  * Pure WFH authorization validator:
  * Allows WFH check-in ONLY when the employee holds at least one active remote/hybrid
- * project allocation OR has an approved WFH request covering today's IST work date.
+ * project allocation, has an explicitly authorized remote profile assignment,
+ * OR has an approved WFH request covering today's IST work date.
  */
 export function evaluateWfhAuthorization(args: {
   projectWorkModes: readonly (string | null | undefined)[];
   hasApprovedWfhToday: boolean;
+  isAuthorizedRemoteRole?: boolean;
 }): true {
   if (args.hasApprovedWfhToday) return true;
+  if (args.isAuthorizedRemoteRole) return true;
   const hasRemoteCapableProject = args.projectWorkModes.some(
     (mode) => mode === "remote" || mode === "hybrid",
   );

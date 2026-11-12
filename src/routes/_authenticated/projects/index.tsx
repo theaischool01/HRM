@@ -13,6 +13,7 @@ import { AppShell } from "@/components/app-shell";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { createProject, listProjects } from "@/lib/projects.functions";
+import { describeUnknownError } from "@/lib/describe-error";
 import { getOrgReference } from "@/lib/workforce.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +121,10 @@ function ProjectsPage() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (form.startDate && form.endDate && form.endDate < form.startDate) {
+      toast.error("The end date cannot be before the start date.");
+      return;
+    }
     setBusy(true);
     try {
       await createProject({
@@ -149,7 +154,7 @@ function ProjectsPage() {
       setForm({ ...form, code: "", name: "", clientName: "", description: "" });
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not create the project.");
+      toast.error(describeUnknownError(error));
     } finally {
       setBusy(false);
     }
@@ -175,6 +180,11 @@ function ProjectsPage() {
             <CardDescription>Targets set here become the default for everyone allocated to it.</CardDescription>
           </CardHeader>
           <CardContent>
+            {!actor.can("projects:manage:all") && (
+              <div className="mb-4 rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Department Scoped Manager:</span> You can create and manage projects within your authorized departments.
+              </div>
+            )}
             <form onSubmit={submit} className="grid gap-4 md:grid-cols-3">
               <Field label="Project code" htmlFor="code">
                 <Input id="code" required value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />

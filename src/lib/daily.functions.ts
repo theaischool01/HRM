@@ -166,33 +166,44 @@ export const checkIn = createServerFn({ method: "POST" })
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "attendance:log:self");
 
-    const allocations = await loadWorkableAllocations(supabase, userId);
-    if (allocations.length === 0) {
-      throw new Error(
-        "You have no active, acknowledged project assignment today, so work logging is closed. Acknowledge your assignment first.",
-      );
-    }
-    // Second, authoritative gate: the same can_log_work() the RLS policy uses.
-    const gated = await Promise.all(
-      allocations.map(async (a) => {
-        const { data: ok } = await supabase.rpc("can_log_work", {
-          _user_id: userId,
-          _project_id: a.project_id,
-        });
-        return ok === true;
-      }),
+    const { loadActor } = await import("./actor.server");
+    const actor = await loadActor(supabase, userId);
+    const isManagementRole = actor.roles.some(
+      (r) => r === "manager" || r === "admin" || r === "super_admin" || r === "hr",
     );
-    if (!gated.some(Boolean)) {
-      throw new Error("Work logging is blocked until an assignment is active and acknowledged.");
+
+    const allocations = await loadWorkableAllocations(supabase, userId);
+    if (!isManagementRole) {
+      if (allocations.length === 0) {
+        throw new Error(
+          "You have no active, acknowledged project assignment today, so work logging is closed. Acknowledge your assignment first.",
+        );
+      }
+      // Second, authoritative gate: the same can_log_work() the RLS policy uses.
+      const gated = await Promise.all(
+        allocations.map(async (a) => {
+          const { data: ok } = await supabase.rpc("can_log_work", {
+            _user_id: userId,
+            _project_id: a.project_id,
+          });
+          return ok === true;
+        }),
+      );
+      if (!gated.some(Boolean)) {
+        throw new Error("Work logging is blocked until an assignment is active and acknowledged.");
+      }
     }
 
     const workDate = todayIso();
     const existing = await loadDay(supabase, userId, workDate);
     if (existing?.check_in_at) throw new Error("You are already checked in for today.");
 
-    const requiredMinutes = Math.round(
-      allocations.reduce((sum, a) => sum + Number(a.hours_per_day ?? 0), 0) * 60,
-    );
+    const requiredMinutes =
+      allocations.length > 0
+        ? Math.round(
+            allocations.reduce((sum, a) => sum + Number(a.hours_per_day ?? 0), 0) * 60,
+          )
+        : 480;
 
     // Location & WFH authorization gates
     let location = {
@@ -208,22 +219,33 @@ export const checkIn = createServerFn({ method: "POST" })
       const offices = await loadActiveOffices(supabase);
       location = evaluateWfoGeofence(data.location, offices);
     } else if (data.workMode === "wfh") {
-      const { data: wfhRequests } = await supabase
-        .from("requests")
-        .select("id")
-        .eq("user_id", userId)
-        .eq("request_type", "wfh")
-        .eq("status", "approved")
-        .lte("start_date", workDate)
-        .gte("end_date", workDate)
-        .limit(1);
+      const [{ data: wfhRequests }, { data: profileRow }] = await Promise.all([
+        supabase
+          .from("requests")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("request_type", "wfh")
+          .eq("status", "approved")
+          .lte("start_date", workDate)
+          .gte("end_date", workDate)
+          .limit(1),
+        supabase
+          .from("profiles")
+          .select("work_location")
+          .eq("id", userId)
+          .maybeSingle(),
+      ]);
 
       const projectWorkModes = allocations.map(
         (a) => (a.projects as { work_mode?: string | null } | null)?.work_mode ?? null,
       );
+      const isRemoteProfile =
+        profileRow?.work_location === "remote" || profileRow?.work_location === "hybrid";
+
       evaluateWfhAuthorization({
         projectWorkModes,
         hasApprovedWfhToday: (wfhRequests ?? []).length > 0,
+        isAuthorizedRemoteRole: isRemoteProfile,
       });
     }
 
