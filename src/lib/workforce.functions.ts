@@ -194,7 +194,7 @@ export const listWorkforce = createServerFn({ method: "GET" })
 
 export const getWorkforceMember = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("A person id is required.");
     return input;
   })
@@ -334,7 +334,7 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
 
 export const updateMyProfile = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: ProfileDraft) => {
+  .validator((input: ProfileDraft) => {
     if (input.fullName !== undefined && String(input.fullName).trim().length < 2) {
       throw new Error("Full name is required.");
     }
@@ -443,7 +443,7 @@ export const submitProfileForVerification = createServerFn({ method: "POST" })
 /** HR/Admin action: verify or send back a submitted profile. */
 export const reviewProfile = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string; approve: boolean; note?: string }) => {
+  .validator((input: { userId: string; approve: boolean; note?: string }) => {
     if (!input?.userId) throw new Error("A person id is required.");
     if (!input.approve && !input.note?.trim()) {
       throw new Error("Explain what needs fixing when sending a profile back.");
@@ -485,7 +485,7 @@ export const reviewProfile = createServerFn({ method: "POST" })
 /** HR/Admin action: employment details that the person may not edit themselves. */
 export const updateEmploymentDetails = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       userId: string;
       designation?: string | null;
@@ -550,7 +550,7 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
 
 export const upsertDepartment = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: { id?: string | null; name: string; code: string; description?: string | null }) => {
       if (!input?.name?.trim()) throw new Error("Department name is required.");
       if (!input?.code?.trim()) throw new Error("Department code is required.");
@@ -598,7 +598,7 @@ export const upsertDepartment = createServerFn({ method: "POST" })
 
 export const setDepartmentManagers = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { departmentId: string; managerIds: string[] }) => {
+  .validator((input: { departmentId: string; managerIds: string[] }) => {
     if (!input?.departmentId) throw new Error("A department id is required.");
     return {
       departmentId: input.departmentId,
@@ -653,7 +653,7 @@ export const setDepartmentManagers = createServerFn({ method: "POST" })
 
 export const getProfileDocuments = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string }) => {
+  .validator((input: { userId: string }) => {
     if (!input?.userId) throw new Error("A person id is required.");
     return input;
   })
@@ -684,7 +684,7 @@ export const getProfileDocuments = createServerFn({ method: "GET" })
 /** Option A: Send Supabase built-in password reset email (Super Admin, Admin, HR). */
 export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string }) => {
+  .validator((input: { userId: string }) => {
     if (!input?.userId) throw new Error("User ID is required.");
     return input;
   })
@@ -735,7 +735,7 @@ export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
 /** Option B: Set temporary password directly (Super Admin ONLY). Never logged. */
 export const setEmployeeTemporaryPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string; temporaryPassword?: string | undefined }) => {
+  .validator((input: { userId: string; temporaryPassword?: string | undefined }) => {
     if (!input?.userId) throw new Error("User ID is required.");
     return input;
   })
@@ -797,7 +797,7 @@ export const setEmployeeTemporaryPassword = createServerFn({ method: "POST" })
 /** Enforced password change when must_change_password is true. */
 export const changeMustChangePassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { newPassword: string }) => {
+  .validator((input: { newPassword: string }) => {
     const pwd = input?.newPassword ?? "";
     if (pwd.length < 8) {
       throw new Error("New password must be at least 8 characters.");
@@ -836,7 +836,7 @@ export const changeMustChangePassword = createServerFn({ method: "POST" })
 /** Voluntary self-service password change from the Unified Profile Security Settings card. */
 export const changeMyPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { newPassword: string }) => {
+  .validator((input: { newPassword: string }) => {
     const pwd = input?.newPassword ?? "";
     if (pwd.length < 8) {
       throw new Error("New password must be at least 8 characters.");

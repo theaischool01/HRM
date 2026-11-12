@@ -51,7 +51,7 @@ export const getInvitationStats = createServerFn({ method: "GET" })
  */
 export const enqueueInvitations = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { invites: InviteDraft[]; source?: string }) => {
+  .validator((input: { invites: InviteDraft[]; source?: string }) => {
     if (!Array.isArray(input.invites) || input.invites.length === 0) {
       throw new Error("At least one invitation is required.");
     }
@@ -161,7 +161,7 @@ export const enqueueInvitations = createServerFn({ method: "POST" })
 
 export const requeueInvitation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("Invitation id is required.");
     return input;
   })
@@ -184,7 +184,7 @@ export const requeueInvitation = createServerFn({ method: "POST" })
 
 export const revokeInvitation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("Invitation id is required.");
     return input;
   })

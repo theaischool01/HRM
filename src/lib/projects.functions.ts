@@ -83,7 +83,7 @@ export const listProjects = createServerFn({ method: "GET" })
 
 export const getProject = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("A project id is required.");
     return input;
   })
@@ -162,7 +162,7 @@ export const getProject = createServerFn({ method: "GET" })
 
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: ProjectDraft) => {
+  .validator((input: ProjectDraft) => {
     if (!input?.code?.trim()) throw new Error("A project code is required.");
     if (!input?.name?.trim()) throw new Error("A project name is required.");
     if (input.startDate && input.endDate && input.endDate < input.startDate) {
@@ -254,7 +254,7 @@ export const createProject = createServerFn({ method: "POST" })
 
 export const updateProjectStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string; status: string }) => {
+  .validator((input: { id: string; status: string }) => {
     if (!input?.id || !input?.status) throw new Error("A project and status are required.");
     return input;
   })
@@ -277,7 +277,7 @@ export const updateProjectStatus = createServerFn({ method: "POST" })
 
 export const updateProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       id: string;
       name: string;

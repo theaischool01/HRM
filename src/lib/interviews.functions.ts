@@ -218,7 +218,7 @@ export const listInterviews = createServerFn({ method: "GET" })
 
 export const scheduleInterview = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       candidateId: string;
       roundNumber?: number | undefined;
@@ -368,7 +368,7 @@ export const scheduleInterview = createServerFn({ method: "POST" })
 
 export const updateInterviewLifecycle = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       interviewId: string;
       action: "reschedule" | "cancel" | "complete" | "no_show";
@@ -506,7 +506,7 @@ export const updateInterviewLifecycle = createServerFn({ method: "POST" })
 
 export const submitInterviewFeedback = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       interviewId: string;
       rating: number;

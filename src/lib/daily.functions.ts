@@ -74,7 +74,7 @@ function aggregateAllocationTargets(
 /** Everything the "My Day" screen needs, all derived server-side. */
 export const getMyDay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { date?: string } | undefined) => input ?? {})
+  .validator((input: { date?: string } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const workDate = data.date ?? todayIso();
@@ -158,7 +158,7 @@ export const getMyDay = createServerFn({ method: "POST" })
 
 export const checkIn = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: CheckInInput) => {
+  .validator((input: CheckInInput) => {
     if (!input?.workMode) throw new Error("Pick a work mode before checking in.");
     return input;
   })
@@ -268,7 +268,7 @@ export const checkIn = createServerFn({ method: "POST" })
 
 export const checkOut = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { device?: Record<string, unknown> | null } | undefined) => input ?? {})
+  .validator((input: { device?: Record<string, unknown> | null } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const day = await loadDay(supabase, userId, todayIso());
@@ -320,7 +320,7 @@ export type TaskEntryInput = {
 
 export const saveTaskEntry = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: TaskEntryInput) => {
+  .validator((input: TaskEntryInput) => {
     if (!input?.allocationId) throw new Error("Pick the project you worked on.");
     if (!input.startedAt || !input.endedAt) throw new Error("Give the entry a start and end time.");
     if (new Date(input.endedAt) <= new Date(input.startedAt))
@@ -386,7 +386,7 @@ export const saveTaskEntry = createServerFn({ method: "POST" })
 
 export const submitTaskEntry = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("An entry is required.");
     return input;
   })
@@ -411,7 +411,7 @@ export const submitTaskEntry = createServerFn({ method: "POST" })
 
 export const deleteTaskEntry = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("An entry is required.");
     return input;
   })
@@ -427,7 +427,7 @@ export const deleteTaskEntry = createServerFn({ method: "POST" })
 
 export const startBreak = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { category: string; note?: string | null }) => {
+  .validator((input: { category: string; note?: string | null }) => {
     if (!input?.category) throw new Error("Pick a break type.");
     return input;
   })
@@ -460,7 +460,7 @@ export const startBreak = createServerFn({ method: "POST" })
 
 export const endBreak = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("A break is required.");
     return input;
   })
@@ -478,7 +478,7 @@ export const endBreak = createServerFn({ method: "POST" })
 
 export const raiseBlocker = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       allocationId?: string | null;
       category: string;
@@ -563,7 +563,7 @@ export const raiseBlocker = createServerFn({ method: "POST" })
 
 export const resolveBlocker = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string; note?: string | null }) => {
+  .validator((input: { id: string; note?: string | null }) => {
     if (!input?.id) throw new Error("A blocker is required.");
     return input;
   })
@@ -660,7 +660,7 @@ export type EodInput = {
 /** Builds the report from the day's real data, then validates before submit. */
 export const saveEodReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: EodInput) => input ?? ({} as EodInput))
+  .validator((input: EodInput) => input ?? ({} as EodInput))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "eod:submit:self");
@@ -780,7 +780,7 @@ export const saveEodReport = createServerFn({ method: "POST" })
 /** Lead-side review of hourly entries. */
 export const listTeamEntries = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { date?: string } | undefined) => input ?? {})
+  .validator((input: { date?: string } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "tasks:read:team");
@@ -810,7 +810,7 @@ export const listTeamEntries = createServerFn({ method: "POST" })
 
 export const reviewTaskEntry = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       id: string;
       decision: "approved" | "revision_required" | "reviewed";
@@ -894,7 +894,7 @@ export const listMyNotifications = createServerFn({ method: "GET" })
 
 export const markNotificationRead = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("A notification is required.");
     return input;
   })

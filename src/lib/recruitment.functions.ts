@@ -138,7 +138,7 @@ export const listCandidates = createServerFn({ method: "GET" })
 
 export const getCandidateDetail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { candidateId: string }) => {
+  .validator((input: { candidateId: string }) => {
     if (!input?.candidateId) throw new Error("Candidate ID is required.");
     return { candidateId: String(input.candidateId).trim() };
   })
@@ -344,7 +344,7 @@ export type UpsertCandidateInput = {
 
 export const upsertCandidate = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: UpsertCandidateInput) => {
+  .validator((input: UpsertCandidateInput) => {
     const fullName = String(input?.fullName ?? "").trim();
     if (fullName.length < 2) throw new Error("Candidate full name is required.");
     const email = String(input?.email ?? "").trim().toLowerCase();
@@ -464,7 +464,7 @@ export const upsertCandidate = createServerFn({ method: "POST" })
 
 export const updateCandidateStage = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: { candidateId: string; toStatus: string; note?: string | undefined }) => {
       if (!input?.candidateId) throw new Error("Candidate ID is required.");
       if (!isCandidateStatus(input?.toStatus)) throw new Error("Invalid target stage.");
@@ -523,7 +523,7 @@ export const updateCandidateStage = createServerFn({ method: "POST" })
 
 export const addCandidateNote = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { candidateId: string; note: string }) => {
+  .validator((input: { candidateId: string; note: string }) => {
     const note = String(input?.note ?? "").trim();
     if (!input?.candidateId) throw new Error("Candidate ID is required.");
     if (!note) throw new Error("Note cannot be empty.");
@@ -549,7 +549,7 @@ export const addCandidateNote = createServerFn({ method: "POST" })
 
 export const bulkUpdateCandidates = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       candidateIds: string[];
       toStatus?: string | undefined;
@@ -646,7 +646,7 @@ export const bulkUpdateCandidates = createServerFn({ method: "POST" })
 
 export const createCandidateResumeUploadUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { candidateId: string; fileName: string }) => {
+  .validator((input: { candidateId: string; fileName: string }) => {
     if (!input?.candidateId) throw new Error("Candidate ID is required.");
     const fileName = String(input.fileName ?? "").trim();
     if (!fileName) throw new Error("File name is required.");
@@ -670,7 +670,7 @@ export const createCandidateResumeUploadUrl = createServerFn({ method: "POST" })
 
 export const registerCandidateResume = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { candidateId: string; path: string; fileName: string }) => {
+  .validator((input: { candidateId: string; path: string; fileName: string }) => {
     if (!input?.candidateId || !input?.path || !input?.fileName) {
       throw new Error("Candidate ID, storage path, and file name are required.");
     }
@@ -724,7 +724,7 @@ export const registerCandidateResume = createServerFn({ method: "POST" })
 
 export const getCandidateResumeDownloadUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { candidateId: string }) => {
+  .validator((input: { candidateId: string }) => {
     if (!input?.candidateId) throw new Error("Candidate ID is required.");
     return input;
   })
@@ -811,7 +811,7 @@ async function loadCandidateImportLookups(
 
 export const validateCandidateImportUpload = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       fileName: string;
       rows: CandidateImportRawRow[];
@@ -855,7 +855,7 @@ export type CandidateImportRowOutcome = {
 
 export const commitCandidateImport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       fileName: string;
       rows: CandidateImportRawRow[];
@@ -1041,7 +1041,7 @@ export const listCandidateImportBatches = createServerFn({ method: "GET" })
 
 export const retryFailedCandidateImport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { batchId: string }) => {
+  .validator((input: { batchId: string }) => {
     if (!input?.batchId) throw new Error("Batch ID is required.");
     return input;
   })
@@ -1134,7 +1134,7 @@ export const retryFailedCandidateImport = createServerFn({ method: "POST" })
 
 export const convertCandidateToEmployee = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       candidateId: string;
       workEmail?: string | undefined;

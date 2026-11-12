@@ -27,7 +27,7 @@ export type OfficeLocationInput = {
 
 export const saveOfficeLocation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: OfficeLocationInput) => {
+  .validator((input: OfficeLocationInput) => {
     if (!input?.name?.trim()) throw new Error("Give the office a name.");
     if (!Number.isFinite(input.latitude) || Math.abs(input.latitude) > 90)
       throw new Error("Latitude must be between -90 and 90.");

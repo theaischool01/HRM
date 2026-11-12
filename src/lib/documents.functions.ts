@@ -28,7 +28,7 @@ async function assertCanAccessDocumentOwner(
  */
 export const createDocumentUploadUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { docType: string; fileName: string }) => {
+  .validator((input: { docType: string; fileName: string }) => {
     if (!input?.docType) throw new Error("Choose a document type.");
     const fileName = String(input.fileName ?? "").trim();
     if (!fileName) throw new Error("A file name is required.");
@@ -50,7 +50,7 @@ export const createDocumentUploadUrl = createServerFn({ method: "POST" })
 
 export const registerDocument = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { docType: string; path: string; fileName: string }) => {
+  .validator((input: { docType: string; path: string; fileName: string }) => {
     if (!input?.docType || !input?.path) throw new Error("Missing upload details.");
     return input;
   })
@@ -106,7 +106,7 @@ export const registerDocument = createServerFn({ method: "POST" })
 
 export const getDocumentDownloadUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { documentId: string }) => {
+  .validator((input: { documentId: string }) => {
     if (!input?.documentId) throw new Error("A document id is required.");
     return input;
   })
@@ -142,7 +142,7 @@ export const getDocumentDownloadUrl = createServerFn({ method: "POST" })
 
 export const reviewDocument = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { documentId: string; approve: boolean; note?: string }) => {
+  .validator((input: { documentId: string; approve: boolean; note?: string }) => {
     if (!input?.documentId) throw new Error("A document id is required.");
     if (!input.approve && !input.note?.trim()) {
       throw new Error("Add a reason when rejecting a document.");

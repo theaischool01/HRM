@@ -41,7 +41,7 @@ export type AllocationDraft = {
 /** Live allocation load for one person, used by the allocate form. */
 export const getAllocationLoad = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string }) => {
+  .validator((input: { userId: string }) => {
     if (!input?.userId) throw new Error("A person is required.");
     return input;
   })
@@ -71,7 +71,7 @@ export const getAllocationLoad = createServerFn({ method: "POST" })
 
 export const createAllocation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: AllocationDraft) => {
+  .validator((input: AllocationDraft) => {
     if (!input?.projectId) throw new Error("A project is required.");
     if (!input?.userId) throw new Error("A person is required.");
     const pct = input.allocationPct ?? 100;
@@ -153,7 +153,7 @@ export const createAllocation = createServerFn({ method: "POST" })
 
 export const endAllocation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("An allocation is required.");
     return input;
   })
@@ -204,7 +204,7 @@ export const listMyAllocations = createServerFn({ method: "GET" })
  */
 export const acknowledgeAllocation = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string; note?: string | null }) => {
+  .validator((input: { id: string; note?: string | null }) => {
     if (!input?.id) throw new Error("An allocation is required.");
     return input;
   })
@@ -249,7 +249,7 @@ export const acknowledgeAllocation = createServerFn({ method: "POST" })
 /** Phase 3 will call this before accepting any work log. */
 export const canLogWork = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { projectId: string }) => {
+  .validator((input: { projectId: string }) => {
     if (!input?.projectId) throw new Error("A project is required.");
     return input;
   })

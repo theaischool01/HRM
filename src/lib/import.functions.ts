@@ -13,7 +13,7 @@ export type SheetPayload = { name: string; grid: Grid; projectId?: string | null
  */
 export const stageImportBatch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { fileName: string; sheets: SheetPayload[] }) => {
+  .validator((input: { fileName: string; sheets: SheetPayload[] }) => {
     if (!input?.fileName) throw new Error("A file name is required.");
     if (!Array.isArray(input.sheets) || input.sheets.length === 0) {
       throw new Error("The workbook has no readable sheets.");
@@ -184,7 +184,7 @@ export const listImportBatches = createServerFn({ method: "GET" })
 
 export const getImportBatch = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { batchId: string }) => input)
+  .validator((input: { batchId: string }) => input)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "import:manage:all");
@@ -221,7 +221,7 @@ export const getImportBatch = createServerFn({ method: "POST" })
 /** Manual mapping: attach an unmatched row to a real account, or skip it. */
 export const resolveImportRow = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       rowId: string;
       resolution: "mapped" | "create_new" | "skipped" | "pending";
@@ -273,7 +273,7 @@ export const resolveImportRow = createServerFn({ method: "POST" })
  */
 export const inviteImportedPeople = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { batchId: string }) => input)
+  .validator((input: { batchId: string }) => input)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "import:manage:all");
@@ -327,7 +327,7 @@ export const inviteImportedPeople = createServerFn({ method: "POST" })
 
 export const commitImport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { batchId: string }) => input)
+  .validator((input: { batchId: string }) => input)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "import:manage:all");

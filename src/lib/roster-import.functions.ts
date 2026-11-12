@@ -47,7 +47,7 @@ async function buildLookups(supabase: Parameters<typeof requirePermission>[0]) {
 /** Validates an uploaded roster against live data. Writes nothing. */
 export const validateRosterUpload = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { fileName: string; rows: RosterRaw[] }) => {
+  .validator((input: { fileName: string; rows: RosterRaw[] }) => {
     if (!Array.isArray(input?.rows) || input.rows.length === 0) {
       throw new Error("That file has no data rows.");
     }
@@ -78,7 +78,7 @@ export type RosterCommitResult = {
  */
 export const commitRosterImport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { fileName: string; rows: RosterRaw[] }) => {
+  .validator((input: { fileName: string; rows: RosterRaw[] }) => {
     if (!Array.isArray(input?.rows) || input.rows.length === 0) {
       throw new Error("Nothing to import.");
     }

@@ -90,7 +90,7 @@ export const previewRequestRouting = createServerFn({ method: "GET" })
 export const submitRequest = createServerFn({ method: "POST" })
 
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: SubmitRequestInput) => {
+  .validator((input: SubmitRequestInput) => {
     if (!isRequestType(input?.requestType)) throw new Error("Pick a valid request type.");
     if (!input?.startDate || !input?.endDate) throw new Error("Pick the dates for this request.");
     if (input.endDate < input.startDate) throw new Error("The end date is before the start date.");
@@ -344,7 +344,7 @@ async function applyApprovedRequest(request: {
 
 export const decideRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: { requestId: string; tier: "lead" | "hr"; decision: "approved" | "rejected"; note?: string | null }) => {
       if (!input?.requestId) throw new Error("A request is required.");
       if (input?.tier !== "lead" && input?.tier !== "hr") throw new Error("Unknown approval tier.");
@@ -464,7 +464,7 @@ export const decideRequest = createServerFn({ method: "POST" })
 
 export const cancelRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { requestId: string }) => {
+  .validator((input: { requestId: string }) => {
     if (!input?.requestId) throw new Error("A request is required.");
     return input;
   })

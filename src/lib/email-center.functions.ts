@@ -115,7 +115,7 @@ export const getEmailCenterData = createServerFn({ method: "GET" })
 
 export const saveEmailTemplate = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       slug: string;
       name: string;
@@ -190,7 +190,7 @@ export const saveEmailTemplate = createServerFn({ method: "POST" })
 
 export const resetEmailTemplateToDefault = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { slug: string }) => {
+  .validator((input: { slug: string }) => {
     if (!input?.slug) throw new Error("Template slug is required.");
     return input;
   })
@@ -226,7 +226,7 @@ export const resetEmailTemplateToDefault = createServerFn({ method: "POST" })
 
 export const saveEmailDraft = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       templateSlug?: string | null | undefined;
       candidateId?: string | null | undefined;
@@ -279,7 +279,7 @@ export const saveEmailDraft = createServerFn({ method: "POST" })
 
 export const sendRecruitmentEmail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       templateSlug?: string | null | undefined;
       candidateId?: string | null | undefined;
@@ -450,7 +450,7 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
 
 export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: {
       candidateIds: string[];
       templateSlug: string;
@@ -679,7 +679,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
 
 export const retryFailedEmail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { messageId: string }) => {
+  .validator((input: { messageId: string }) => {
     if (!input?.messageId) throw new Error("Email message ID is required.");
     return input;
   })

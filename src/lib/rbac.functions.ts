@@ -42,7 +42,7 @@ export const getPermissionMatrix = createServerFn({ method: "GET" })
 
 export const setRolePermission = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { role: string; permissionKey: string; enabled: boolean }) => {
+  .validator((input: { role: string; permissionKey: string; enabled: boolean }) => {
     if (!input?.role || !input?.permissionKey) throw new Error("Role and permission are required.");
     if (input.role === "super_admin") {
       throw new Error("Super Admin permissions are fixed and cannot be edited.");
@@ -97,7 +97,7 @@ export const setRolePermission = createServerFn({ method: "POST" })
 
 export const setUserRoles = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string; roles: string[] }) => {
+  .validator((input: { userId: string; roles: string[] }) => {
     if (!input?.userId) throw new Error("A person id is required.");
     if (!Array.isArray(input.roles) || input.roles.length === 0) {
       throw new Error("Every person needs at least one role.");

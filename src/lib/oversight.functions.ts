@@ -22,7 +22,7 @@ function defaultRange(input?: Partial<OversightFilter>): OversightFilter {
  */
 export const getOversight = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: Partial<OversightFilter> | undefined) => input ?? {})
+  .validator((input: Partial<OversightFilter> | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "attendance:read:team");
@@ -39,7 +39,7 @@ export const getOversight = createServerFn({ method: "POST" })
 /** Consolidated EOD list for reviewers. */
 export const listTeamEods = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { from?: string; to?: string } | undefined) => input ?? {})
+  .validator((input: { from?: string; to?: string } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "eod:read:team");
@@ -119,7 +119,7 @@ const ACTION_TO_STATUS: Record<ReviewActionValue, string> = {
 
 export const reviewEodReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string; action: string; note?: string | null }) => {
+  .validator((input: { id: string; action: string; note?: string | null }) => {
     if (!input?.id) throw new Error("An EOD report is required.");
     if (!isReviewAction(input?.action)) throw new Error("Pick a valid review action.");
     if (
@@ -207,7 +207,7 @@ export const reviewEodReport = createServerFn({ method: "POST" })
 /** Review-action trail for a single person — used by the drill-down view. */
 export const listReviewEvents = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string }) => {
+  .validator((input: { userId: string }) => {
     if (!input?.userId) throw new Error("A person is required.");
     return input;
   })
@@ -244,7 +244,7 @@ export const listAnnouncements = createServerFn({ method: "GET" })
 
 export const publishAnnouncement = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { title: string; body: string }) => {
+  .validator((input: { title: string; body: string }) => {
     if (!input?.title?.trim()) throw new Error("Give the announcement a title.");
     if (!input?.body?.trim()) throw new Error("Write the announcement body.");
     return input;
@@ -295,7 +295,7 @@ export const listCalendarDays = createServerFn({ method: "GET" })
 
 export const upsertCalendarDay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { calendarDate: string; kind: "holiday" | "weekly_off"; label?: string | null }) => {
+  .validator((input: { calendarDate: string; kind: "holiday" | "weekly_off"; label?: string | null }) => {
     if (!input?.calendarDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.calendarDate)) {
       throw new Error("A valid date (YYYY-MM-DD) is required.");
     }
@@ -352,7 +352,7 @@ export const upsertCalendarDay = createServerFn({ method: "POST" })
 
 export const deleteCalendarDay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { id: string }) => {
+  .validator((input: { id: string }) => {
     if (!input?.id) throw new Error("A calendar day id is required.");
     return input;
   })

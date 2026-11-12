@@ -94,7 +94,7 @@ export const getReportFilterOptions = createServerFn({ method: "GET" })
 
 export const buildAttendanceReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(
+  .validator(
     (input: { type: "employee" | "project"; filter?: Partial<ReportFilter> }) => {
       if (input?.type !== "employee" && input?.type !== "project") {
         throw new Error("Pick an export type.");

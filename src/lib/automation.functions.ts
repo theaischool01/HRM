@@ -30,7 +30,7 @@ export const getAutomationOverview = createServerFn({ method: "GET" })
 
 export const updateAutomationSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: Record<string, number | string | boolean>) => input)
+  .validator((input: Record<string, number | string | boolean>) => input)
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "automation:run:all");
@@ -72,7 +72,7 @@ import { daysAgoIso } from "./timezone";
 /** Flags visible to the caller (RLS already scopes self / team / all). */
 export const listMyFlags = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { from?: string } | undefined) => input ?? {})
+  .validator((input: { from?: string } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
     const from = data.from ?? daysAgoIso(30);
     const { data: rows, error } = await context.supabase
