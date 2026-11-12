@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { requirePermission } from "./actor.server";
+import { loadActor, requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
 import { notify } from "./daily-queries.server";
 import { isRequestType, type RequestTypeValue } from "./enums";
@@ -12,6 +12,7 @@ import {
   routeRequest,
 } from "./request-routing";
 import { loadProfileNames, nameOf } from "./profile-names.server";
+import { evalCanReviewOrEscalateSafe, resolveSupervisorScope } from "./schema-compat.server";
 import type { AppRole } from "./permissions";
 
 /**
@@ -232,27 +233,41 @@ export const listRequestQueue = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { supabase, userId } = context;
-    const [{ data: canLead }, { data: canHr }] = await Promise.all([
-      supabase.rpc("has_permission", { _user_id: userId, _permission: "requests:approve:lead" }),
-      supabase.rpc("has_permission", { _user_id: userId, _permission: "requests:approve:hr" }),
-    ]);
+    const actor = await loadActor(supabase, userId);
+    const canLead = actor.permissions.includes("requests:approve:lead");
+    const canHr = actor.permissions.includes("requests:approve:hr");
+    const myRoles = actor.roles;
+    const canEscalateLead =
+      myRoles.includes("super_admin") ||
+      myRoles.includes("admin") ||
+      myRoles.includes("manager");
 
-    const { data: requests, error } = await supabase
-      .from("requests")
-      .select(REQUEST_SELECT)
-      .neq("user_id", userId)
-      .order("submitted_at", { ascending: false })
-      .limit(200);
+    const [scope, { data: rawRequests, error }] = await Promise.all([
+      actor.permissions.includes("requests:read:all")
+        ? Promise.resolve(null)
+        : resolveSupervisorScope(supabase, userId, actor.roles),
+      supabase
+        .from("requests")
+        .select(REQUEST_SELECT)
+        .neq("user_id", userId)
+        .order("submitted_at", { ascending: false })
+        .limit(200),
+    ]);
     if (error) throw error;
 
+    const requests = scope
+      ? (rawRequests ?? []).filter((r) => scope.scopedUserIds.has(r.user_id))
+      : (rawRequests ?? []);
+
     const [approvals, names] = await Promise.all([
-      loadRequestBundle(supabase, (requests ?? []).map((r) => r.id)),
-      loadProfileNames(supabase, (requests ?? []).map((r) => r.user_id)),
+      loadRequestBundle(supabase, requests.map((r) => r.id)),
+      loadProfileNames(supabase, requests.map((r) => r.user_id)),
     ]);
     return {
-      canLead: canLead === true,
-      canHr: canHr === true,
-      requests: (requests ?? []).map((r) => ({
+      canLead,
+      canHr,
+      canEscalateLead,
+      requests: requests.map((r) => ({
         ...r,
         profiles: {
           full_name: nameOf(names, r.user_id),
@@ -263,6 +278,69 @@ export const listRequestQueue = createServerFn({ method: "GET" })
     };
 
   });
+
+async function applyApprovedRequest(request: {
+  id: string;
+  user_id: string;
+  request_type: string;
+  start_date: string;
+  end_date: string;
+  reason: string;
+  requested_check_in: string | null;
+  requested_check_out: string | null;
+}) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const dates: string[] = [];
+  const cur = new Date(`${request.start_date}T00:00:00Z`);
+  const end = new Date(`${request.end_date}T00:00:00Z`);
+  while (cur <= end && dates.length <= 60) {
+    dates.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+
+  if (request.request_type === "leave") {
+    for (const workDate of dates) {
+      await supabaseAdmin.from("attendance_days").upsert(
+        {
+          user_id: request.user_id,
+          work_date: workDate,
+          exception_type: "leave",
+          exception_note: request.reason,
+        },
+        { onConflict: "user_id,work_date" },
+      );
+    }
+  } else if (request.request_type === "wfh") {
+    for (const workDate of dates) {
+      await supabaseAdmin
+        .from("attendance_days")
+        .update({ work_mode: "wfh", location_status: "not_required" })
+        .eq("user_id", request.user_id)
+        .eq("work_date", workDate);
+    }
+  } else if (request.request_type === "attendance_correction") {
+    for (const workDate of dates) {
+      const patch: Record<string, unknown> = {
+        user_id: request.user_id,
+        work_date: workDate,
+        exception_type: "none",
+        exception_note: `Regularized: ${request.reason}`,
+      };
+      if (request.requested_check_in) patch["check_in_at"] = request.requested_check_in;
+      if (request.requested_check_out) patch["check_out_at"] = request.requested_check_out;
+      await supabaseAdmin
+        .from("attendance_days")
+        .upsert(patch as never, { onConflict: "user_id,work_date" });
+    }
+    await supabaseAdmin
+      .from("automation_flags")
+      .update({ resolved_at: new Date().toISOString() })
+      .eq("user_id", request.user_id)
+      .gte("work_date", request.start_date)
+      .lte("work_date", request.end_date)
+      .is("resolved_at", null);
+  }
+}
 
 export const decideRequest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -283,19 +361,32 @@ export const decideRequest = createServerFn({ method: "POST" })
       data.tier === "lead" ? "requests:approve:lead" : "requests:approve:hr",
     );
 
-    const { data: existing, error: loadError } = await supabase
-      .from("request_approvals")
-      .select(APPROVAL_SELECT)
-      .eq("request_id", data.requestId)
-      .eq("tier", data.tier)
-      .maybeSingle();
+    const [{ data: reqRow, error: reqLoadError }, { data: existing, error: loadError }] =
+      await Promise.all([
+        supabase.from("requests").select("id, user_id").eq("id", data.requestId).maybeSingle(),
+        supabase
+          .from("request_approvals")
+          .select(APPROVAL_SELECT)
+          .eq("request_id", data.requestId)
+          .eq("tier", data.tier)
+          .maybeSingle(),
+      ]);
+    if (reqLoadError) throw reqLoadError;
     if (loadError) throw loadError;
+    if (!reqRow) throw new Error("Request not found or not visible to you.");
+    if (reqRow.user_id === userId) {
+      throw new Error("Forbidden: you cannot approve or reject your own request.");
+    }
     if (!existing) throw new Error("This request does not need a decision from your tier.");
     if (existing.decision !== "pending")
       throw new Error("That decision has already been recorded and cannot be changed.");
-    // A lead may only decide requests routed to them, not another team's.
-    if (data.tier === "lead" && existing.approver_id && existing.approver_id !== userId)
-      throw new Error("This request is waiting on a different reporting lead.");
+
+    if (data.tier === "lead" && existing.approver_id && existing.approver_id !== userId) {
+      const canEscalate = await evalCanReviewOrEscalateSafe(supabase, reqRow.user_id, userId);
+      if (!canEscalate) {
+        throw new Error("This request is waiting on a different reporting lead.");
+      }
+    }
 
     const now = new Date().toISOString();
     const { error: updateError } = await supabase
@@ -327,6 +418,10 @@ export const decideRequest = createServerFn({ method: "POST" })
       .select(`${REQUEST_SELECT}`)
       .single();
     if (reqError) throw reqError;
+
+    if (overall === "approved") {
+      await applyApprovedRequest(request);
+    }
 
     await supabase.from("review_events").insert({
       entity_type: "request",
@@ -375,6 +470,7 @@ export const cancelRequest = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "requests:submit:self");
     const { data: row, error } = await supabase
       .from("requests")
       .update({ status: "cancelled", decided_at: new Date().toISOString() })

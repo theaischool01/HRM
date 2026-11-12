@@ -1,17 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { requirePermission } from "./actor.server";
+import { loadActor, requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
 import { notify } from "./daily-queries.server";
 import { isReviewAction, type ReviewActionValue } from "./enums";
 import { loadOversightRows, summariseRows, type OversightFilter } from "./oversight.server";
 import { loadProfileNames, nameOf } from "./profile-names.server";
-
+import { evalCanReviewOrEscalateSafe, resolveSupervisorScope } from "./schema-compat.server";
+import { daysAgoIso, todayIso } from "./timezone";
 
 function defaultRange(input?: Partial<OversightFilter>): OversightFilter {
-  const to = input?.to ?? new Date().toISOString().slice(0, 10);
-  const from =
-    input?.from ?? new Date(Date.now() - 13 * 86_400_000).toISOString().slice(0, 10);
+  const now = new Date();
+  const to = input?.to ?? todayIso(now);
+  const from = input?.from ?? daysAgoIso(13, now);
   return { from, to, userId: input?.userId ?? null, projectId: input?.projectId ?? null };
 }
 
@@ -25,8 +26,13 @@ export const getOversight = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "attendance:read:team");
+    const actor = await loadActor(supabase, userId);
     const filter = defaultRange(data);
-    const rows = await loadOversightRows(supabase, filter);
+    const allRows = await loadOversightRows(supabase, filter);
+    const scope = actor.permissions.includes("attendance:read:all")
+      ? null
+      : await resolveSupervisorScope(supabase, userId, actor.roles);
+    const rows = scope ? allRows.filter((r) => scope.scopedUserIds.has(r.userId)) : allRows;
     return { filter, rows, summary: summariseRows(rows) };
   });
 
@@ -37,8 +43,12 @@ export const listTeamEods = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "eod:read:team");
+    const actor = await loadActor(supabase, userId);
+    const scope = actor.permissions.includes("eod:read:all")
+      ? null
+      : await resolveSupervisorScope(supabase, userId, actor.roles);
     const filter = defaultRange(data);
-    const { data: rows, error } = await supabase
+    const { data: rawRows, error } = await supabase
       .from("eod_reports")
       .select(
         "id, day_id, user_id, work_date, highlights, challenges, tomorrow_plan, support_needed, metrics, status, submitted_at, reviewed_by, reviewed_at, review_note",
@@ -49,6 +59,9 @@ export const listTeamEods = createServerFn({ method: "POST" })
       .order("work_date", { ascending: false })
       .limit(200);
     if (error) throw error;
+    const rows = scope
+      ? (rawRows ?? []).filter((r) => scope.scopedUserIds.has(r.user_id))
+      : (rawRows ?? []);
 
     const ids = (rows ?? []).map((r) => r.id);
     type EodEvent = {
@@ -122,6 +135,22 @@ export const reviewEodReport = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "eod:review:team");
+
+    const { data: target, error: findErr } = await supabase
+      .from("eod_reports")
+      .select("id, user_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!target) throw new Error("EOD report not found or not visible to you.");
+    if (target.user_id === userId) {
+      throw new Error("Forbidden: you cannot review your own EOD report.");
+    }
+    const canReview = await evalCanReviewOrEscalateSafe(supabase, target.user_id, userId);
+    if (!canReview) {
+      throw new Error("Forbidden: you can only review EOD reports for your assigned scope or escalations.");
+    }
+
     const action = data.action as ReviewActionValue;
     const now = new Date().toISOString();
 
@@ -250,4 +279,101 @@ export const listAuditLog = createServerFn({ method: "GET" })
       .limit(100);
     if (error) throw error;
     return data ?? [];
+  });
+
+export const listCalendarDays = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { data, error } = await context.supabase
+      .from("org_calendar_days")
+      .select("id, calendar_date, kind, label, project_id, source, created_at")
+      .order("calendar_date", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    return data ?? [];
+  });
+
+export const upsertCalendarDay = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { calendarDate: string; kind: "holiday" | "weekly_off"; label?: string | null }) => {
+    if (!input?.calendarDate || !/^\d{4}-\d{2}-\d{2}$/.test(input.calendarDate)) {
+      throw new Error("A valid date (YYYY-MM-DD) is required.");
+    }
+    if (input.kind !== "holiday" && input.kind !== "weekly_off") {
+      throw new Error("Calendar day kind must be holiday or weekly_off.");
+    }
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const [{ data: canOrg }, { data: canImport }] = await Promise.all([
+      supabase.rpc("has_permission", { _user_id: userId, _permission: "org:manage:all" }),
+      supabase.rpc("has_permission", { _user_id: userId, _permission: "import:manage:all" }),
+    ]);
+    if (canOrg !== true && canImport !== true) {
+      await requirePermission(supabase, userId, "org:manage:all");
+    }
+
+    const { data: existing } = await supabase
+      .from("org_calendar_days")
+      .select("id")
+      .eq("calendar_date", data.calendarDate)
+      .is("project_id", null)
+      .maybeSingle();
+
+    const payload = {
+      calendar_date: data.calendarDate,
+      kind: data.kind,
+      label: data.label?.trim() || (data.kind === "holiday" ? "Holiday" : "Weekly Off"),
+      project_id: null,
+      source: "manual",
+    };
+
+    const { data: row, error } = existing
+      ? await supabase
+          .from("org_calendar_days")
+          .update(payload)
+          .eq("id", existing.id)
+          .select("*")
+          .single()
+      : await supabase.from("org_calendar_days").insert(payload).select("*").single();
+    if (error) throw error;
+
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "calendar.day_saved",
+      entityType: "org_calendar_day",
+      entityId: row.id,
+      detail: { calendar_date: data.calendarDate, kind: data.kind, label: payload.label },
+    });
+
+    return { day: row };
+  });
+
+export const deleteCalendarDay = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { id: string }) => {
+    if (!input?.id) throw new Error("A calendar day id is required.");
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const [{ data: canOrg }, { data: canImport }] = await Promise.all([
+      supabase.rpc("has_permission", { _user_id: userId, _permission: "org:manage:all" }),
+      supabase.rpc("has_permission", { _user_id: userId, _permission: "import:manage:all" }),
+    ]);
+    if (canOrg !== true && canImport !== true) {
+      await requirePermission(supabase, userId, "org:manage:all");
+    }
+
+    const { error } = await supabase.from("org_calendar_days").delete().eq("id", data.id);
+    if (error) throw error;
+
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "calendar.day_deleted",
+      entityType: "org_calendar_day",
+      entityId: data.id,
+    });
+    return { ok: true };
   });

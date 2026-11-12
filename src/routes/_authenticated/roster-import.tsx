@@ -4,17 +4,26 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Download, Upload } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { actorQueryOptions } from "@/hooks/use-actor";
-import { errorToAccessScreen } from "@/components/access-denied";
-import { AccessDenied } from "@/components/access-denied";
+import { AccessDenied, errorToAccessScreen } from "@/components/access-denied";
+import { HubSubNav, ONBOARDING_HUB_TABS } from "@/components/hub-subnav";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { useActor } from "@/hooks/use-actor";
+import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { downloadXlsx } from "@/lib/xlsx-export";
+import { runInvitationDispatch } from "@/lib/invitations.functions";
 import {
   ROSTER_COLUMNS,
   TEMPLATE_SAMPLE_ROWS,
@@ -27,7 +36,7 @@ import {
   validateRosterUpload,
   type RosterCommitResult,
 } from "@/lib/roster-import.functions";
-import { runInvitationDispatch } from "@/lib/invitations.functions";
+import { downloadXlsx } from "@/lib/xlsx-export";
 
 export const Route = createFileRoute("/_authenticated/roster-import")({
   head: () => ({
@@ -73,6 +82,7 @@ function RosterImportPage() {
   } | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState(false);
+  const [confirmCommitOpen, setConfirmCommitOpen] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [result, setResult] = useState<{
     created: number;
@@ -80,6 +90,12 @@ function RosterImportPage() {
     failed: number;
     results: RosterCommitResult[];
   } | null>(null);
+
+  const visible = useMemo(() => {
+    if (!rows) return [];
+    if (filter === "all") return rows;
+    return rows.filter((r) => r.severity === filter);
+  }, [rows, filter]);
 
   if (!actor.can("workforce:create:all") || !actor.can("invitations:create:all")) {
     return (
@@ -90,17 +106,18 @@ function RosterImportPage() {
     );
   }
 
-  const visible = useMemo(() => {
-    if (!rows) return [];
-    if (filter === "all") return rows;
-    return rows.filter((r) => r.severity === filter);
-  }, [rows, filter]);
-
   function downloadTemplate(kind: "csv" | "xlsx") {
     if (kind === "csv") {
       downloadCsv(
         "employee_roster_template.csv",
-        toCsv(TEMPLATE_ROWS, ROSTER_COLUMNS.map((c) => ({ key: c, header: c, value: (r: Record<string, string>) => r[c] }))),
+        toCsv(
+          TEMPLATE_ROWS,
+          ROSTER_COLUMNS.map((c) => ({
+            key: c,
+            header: c,
+            value: (r: Record<string, string>) => r[c],
+          })),
+        ),
       );
     } else {
       void downloadXlsx("employee_roster_template.xlsx", "Roster", TEMPLATE_ROWS);
@@ -109,6 +126,7 @@ function RosterImportPage() {
 
   async function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    event.target.value = "";
     if (!file) return;
     setBusy(true);
     setResult(null);
@@ -129,16 +147,25 @@ function RosterImportPage() {
           defval: "",
         }) as (string | number | Date | null)[][]
       ).map((row) =>
-        row.map((cell) =>
-          cell instanceof Date ? cell.toISOString().slice(0, 10) : cell,
-        ),
+        row.map((cell) => {
+          if (!(cell instanceof Date)) return cell;
+          // Preserve calendar date in IST/local time rather than shifting -1 day via UTC toISOString()
+          return new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Asia/Kolkata",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }).format(cell);
+        }),
       );
       const parsed = gridToRosterRaw(grid);
 
       if (parsed.length === 0) throw new Error("No data rows were found in that file.");
       setFileName(file.name);
       setRaw(parsed);
-      const validated = await validateRosterUpload({ data: { fileName: file.name, rows: parsed } });
+      const validated = await validateRosterUpload({
+        data: { fileName: file.name, rows: parsed },
+      });
       setRows(validated.rows as RosterRow[]);
       setSummary(validated.summary);
       setFilter("all");
@@ -152,6 +179,7 @@ function RosterImportPage() {
   async function runImport() {
     if (!rows) return;
     setBusy(true);
+    setConfirmCommitOpen(false);
     setProgress(`Queuing ${summary?.importable ?? 0} invitations…`);
     try {
       const outcome = await commitRosterImport({ data: { fileName, rows: raw } });
@@ -176,28 +204,38 @@ function RosterImportPage() {
       title="Bulk roster import"
       description="Upload a roster, review every row, then queue invitations through the throttled invite queue."
       actions={
-        <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => downloadTemplate("csv")}>
-            <Download className="mr-1.5 size-4" /> Template (CSV)
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => downloadTemplate("csv")}>
+            <Download className="mr-1.5 size-4" aria-hidden="true" /> Template (CSV)
           </Button>
-          <Button size="sm" variant="outline" onClick={() => downloadTemplate("xlsx")}>
-            <Download className="mr-1.5 size-4" /> Template (Excel)
+          <Button type="button" size="sm" variant="outline" onClick={() => downloadTemplate("xlsx")}>
+            <Download className="mr-1.5 size-4" aria-hidden="true" /> Template (Excel)
           </Button>
         </div>
       }
     >
+      <HubSubNav tabs={ONBOARDING_HUB_TABS} />
       <div className="space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">1 · Upload the roster</CardTitle>
             <CardDescription>
-              CSV or Excel with the template columns. Employee IDs (TAS-001, ...) are automatically assigned sequentially on account provisioning.
+              CSV or Excel with the template columns. Employee IDs (TAS-001, ...) are automatically
+              assigned sequentially on account provisioning.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Label htmlFor="roster">Roster file</Label>
-            <Input id="roster" type="file" accept=".csv,.xlsx,.xls" onChange={onFile} disabled={busy} />
-            {fileName ? <p className="text-xs text-muted-foreground">{fileName}</p> : null}
+            <Label htmlFor="roster">Roster file (.csv, .xlsx, .xls)</Label>
+            <Input
+              id="roster"
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={onFile}
+              disabled={busy}
+            />
+            {fileName ? (
+              <p className="break-words text-xs text-muted-foreground">Selected: {fileName}</p>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -207,7 +245,7 @@ function RosterImportPage() {
               <CardTitle className="text-base">2 · Review {summary.total} rows</CardTitle>
               <CardDescription>
                 {summary.valid} valid · {summary.warning} with warnings · {summary.error} with
-                errors. Rows with errors are skipped.
+                errors. Rows with errors are skipped automatically.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -221,7 +259,9 @@ function RosterImportPage() {
                 ).map(([value, label]) => (
                   <Button
                     key={value}
+                    type="button"
                     size="sm"
+                    aria-pressed={filter === value}
                     variant={filter === value ? "default" : "outline"}
                     onClick={() => setFilter(value)}
                   >
@@ -229,6 +269,7 @@ function RosterImportPage() {
                   </Button>
                 ))}
                 <Button
+                  type="button"
                   size="sm"
                   variant="outline"
                   disabled={summary.error === 0}
@@ -250,47 +291,89 @@ function RosterImportPage() {
                     )
                   }
                 >
-                  <Download className="mr-1.5 size-4" /> Errors only
+                  <Download className="mr-1.5 size-4" aria-hidden="true" /> Export errors CSV
                 </Button>
               </div>
 
-              <div className="max-h-[28rem] overflow-auto rounded-md border">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-muted text-left text-xs uppercase tracking-wide">
+              <div className="max-h-[28rem] overflow-auto rounded-md border border-border">
+                <table className="w-full min-w-[780px] text-sm">
+                  <thead className="sticky top-0 z-10 border-b border-border bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
-                      <th className="px-2 py-2">#</th>
-                      <th className="px-2 py-2">Name</th>
-                      <th className="px-2 py-2">Email</th>
-                      <th className="px-2 py-2">Type</th>
-                      <th className="px-2 py-2">Designation</th>
-                      <th className="px-2 py-2">Department</th>
-                      <th className="px-2 py-2">Joining</th>
-                      <th className="px-2 py-2">Lead</th>
-                      <th className="px-2 py-2">Notes</th>
+                      <th scope="col" className="px-2.5 py-2">
+                        #
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        State
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Name
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Email
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Type
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Designation
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Department
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Joining
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Lead
+                      </th>
+                      <th scope="col" className="px-2.5 py-2">
+                        Validation Notes
+                      </th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-border/70">
                     {visible.map((row) => (
                       <tr
                         key={row.rowNumber}
                         className={
                           row.severity === "error"
-                            ? "bg-destructive/10"
+                            ? "bg-destructive/8"
                             : row.severity === "warning"
-                              ? "bg-amber-100/70 dark:bg-amber-500/15"
-                              : "bg-emerald-100/60 dark:bg-emerald-500/10"
+                              ? "bg-amber-500/8"
+                              : "bg-emerald-500/5"
                         }
                       >
-                        <td className="px-2 py-1.5">{row.rowNumber}</td>
-                        <td className="px-2 py-1.5">{row.fullName || "—"}</td>
-                        <td className="px-2 py-1.5">{row.raw["Work Email"] || "—"}</td>
-                        <td className="px-2 py-1.5">{row.employmentType ?? row.raw["Employment Type"] ?? "—"}</td>
-                        <td className="px-2 py-1.5">{row.designation || "—"}</td>
-                        <td className="px-2 py-1.5">{row.departmentName ?? "—"}</td>
-                        <td className="px-2 py-1.5">{row.joiningDate ?? row.raw["Joining Date"] ?? "—"}</td>
-                        <td className="px-2 py-1.5">{row.reportingLeadEmail ?? "—"}</td>
-                        <td className="px-2 py-1.5 text-xs">
-                          {[...row.errors, ...row.warnings].join(" ") || "Ready"}
+                        <td className="px-2.5 py-2 font-mono text-xs">{row.rowNumber}</td>
+                        <td className="px-2.5 py-2">
+                          <Badge
+                            variant={
+                              row.severity === "error"
+                                ? "destructive"
+                                : row.severity === "warning"
+                                  ? "warning"
+                                  : "success"
+                            }
+                          >
+                            {row.severity === "error"
+                              ? "Error"
+                              : row.severity === "warning"
+                                ? "Warning"
+                                : "Ready"}
+                          </Badge>
+                        </td>
+                        <td className="px-2.5 py-2 font-medium">{row.fullName || "—"}</td>
+                        <td className="px-2.5 py-2 text-xs">{row.raw["Work Email"] || "—"}</td>
+                        <td className="px-2.5 py-2 text-xs">
+                          {row.employmentType ?? row.raw["Employment Type"] ?? "—"}
+                        </td>
+                        <td className="px-2.5 py-2 text-xs">{row.designation || "—"}</td>
+                        <td className="px-2.5 py-2 text-xs">{row.departmentName ?? "—"}</td>
+                        <td className="px-2.5 py-2 font-mono text-xs">
+                          {row.joiningDate ?? row.raw["Joining Date"] ?? "—"}
+                        </td>
+                        <td className="px-2.5 py-2 text-xs">{row.reportingLeadEmail ?? "—"}</td>
+                        <td className="px-2.5 py-2 text-xs">
+                          {[...row.errors, ...row.warnings].join(" ") || "Valid for import"}
                         </td>
                       </tr>
                     ))}
@@ -298,11 +381,17 @@ function RosterImportPage() {
                 </table>
               </div>
 
-              <div className="flex items-center gap-2">
-                <Button onClick={runImport} disabled={busy || summary.importable === 0}>
-                  <Upload className="mr-1.5 size-4" /> Import {summary.importable} valid rows
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  onClick={() => setConfirmCommitOpen(true)}
+                  disabled={busy || summary.importable === 0}
+                >
+                  <Upload className="mr-1.5 size-4" aria-hidden="true" /> Import{" "}
+                  {summary.importable} valid row{summary.importable === 1 ? "" : "s"}
                 </Button>
                 <Button
+                  type="button"
                   variant="outline"
                   disabled={busy}
                   onClick={() => {
@@ -313,7 +402,11 @@ function RosterImportPage() {
                 >
                   Cancel
                 </Button>
-                {progress ? <span className="text-sm text-muted-foreground">{progress}</span> : null}
+                {progress ? (
+                  <span role="status" aria-live="polite" className="text-sm text-muted-foreground">
+                    {progress}
+                  </span>
+                ) : null}
               </div>
             </CardContent>
           </Card>
@@ -328,12 +421,13 @@ function RosterImportPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="flex gap-2">
-                <Badge>{result.created} created</Badge>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="success">{result.created} created</Badge>
                 <Badge variant="secondary">{result.skipped} skipped</Badge>
                 <Badge variant="destructive">{result.failed} failed</Badge>
               </div>
               <Button
+                type="button"
                 size="sm"
                 variant="outline"
                 onClick={() =>
@@ -349,12 +443,41 @@ function RosterImportPage() {
                   )
                 }
               >
-                <Download className="mr-1.5 size-4" /> Download full result CSV
+                <Download className="mr-1.5 size-4" aria-hidden="true" /> Download full result CSV
               </Button>
             </CardContent>
           </Card>
         ) : null}
       </div>
+
+      <AlertDialog open={confirmCommitOpen} onOpenChange={setConfirmCommitOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Queue and dispatch {summary?.importable ?? 0} employee invitations?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This creates invitation records for all {summary?.importable ?? 0} importable rows in{" "}
+              <strong>{fileName}</strong> and immediately runs the throttled invitation dispatcher.
+              {summary && summary.error > 0
+                ? ` (${summary.error} row(s) with errors will be skipped.)`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy}
+              onClick={(e) => {
+                e.preventDefault();
+                void runImport();
+              }}
+            >
+              {busy ? "Importing…" : "Confirm & import"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

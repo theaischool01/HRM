@@ -1,19 +1,24 @@
 import { createServerFn } from "@tanstack/react-start";
 import { isProjectShift, isTaskUnit, type ProjectShiftValue } from "@/lib/enums";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { requirePermission } from "./actor.server";
+import { hasPermission, requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
 import { loadProfileNames } from "./profile-names.server";
-
-
-const PROJECT_SELECT =
-  "id, code, client_name, name, description, start_date, end_date, project_lead_id, work_mode, shift, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, required_headcount, status, created_at";
+import {
+  evalCanManageProjectSafe,
+  isMissingSchemaResourceError,
+  resolveSupervisorScope,
+  selectDepartmentManagersSafe,
+  selectProjectsSafe,
+} from "./schema-compat.server";
 
 export type ProjectDraft = {
   code: string;
   name: string;
   clientName?: string | null;
   description?: string | null;
+  departmentId?: string | null;
+  projectManagerId?: string | null;
   startDate?: string | null;
   endDate?: string | null;
   projectLeadId?: string | null;
@@ -29,20 +34,42 @@ export type ProjectDraft = {
   status?: string;
 };
 
-/** RLS decides the row set: read:all sees every project, a lead sees the ones
- *  they lead, an employee sees only projects they are allocated to. */
+async function requireProjectManage(
+  supabase: Parameters<typeof requirePermission>[0],
+  userId: string,
+  projectId: string,
+) {
+  if (await hasPermission(supabase, userId, "projects:manage:all")) return;
+
+  await requirePermission(supabase, userId, "projects:manage:team");
+  const canScoped = await evalCanManageProjectSafe(supabase, projectId, userId);
+  if (!canScoped) {
+    throw new Error("Forbidden: you can only edit projects assigned to you or your managed departments.");
+  }
+}
+
+/** RLS + server scope decides the row set: read:all sees every project, Manager sees
+ *  assigned department/project scope, a lead sees the ones they lead, an employee sees allocated projects. */
 export const listProjects = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const [{ data: projects, error }, { data: allocations }] = await Promise.all([
-      context.supabase.from("projects").select(PROJECT_SELECT).order("created_at", { ascending: false }),
+    const { loadActor } = await import("./actor.server");
+    const actor = await loadActor(context.supabase, context.userId);
+    const [projRes, { data: allocations }, scope] = await Promise.all([
+      selectProjectsSafe(context.supabase),
       context.supabase
         .from("project_allocations")
         .select("id, project_id, user_id, status, allocation_pct, acknowledged_at"),
+      actor.permissions.includes("projects:read:all")
+        ? Promise.resolve(null)
+        : resolveSupervisorScope(context.supabase, context.userId, actor.roles),
     ]);
-    if (error) throw error;
 
-    return (projects ?? []).map((project) => {
+    const visibleProjects = scope
+      ? projRes.rows.filter((p) => scope.scopedProjectIds.has(p.id))
+      : projRes.rows;
+
+    return visibleProjects.map((project) => {
       const rows = (allocations ?? []).filter(
         (a) => a.project_id === project.id && a.status !== "ended",
       );
@@ -61,13 +88,18 @@ export const getProject = createServerFn({ method: "GET" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    const { data: project, error } = await context.supabase
-      .from("projects")
-      .select(PROJECT_SELECT)
-      .eq("id", data.id)
-      .maybeSingle();
-    if (error) throw error;
+    const { loadActor } = await import("./actor.server");
+    const actor = await loadActor(context.supabase, context.userId);
+    const projRes = await selectProjectsSafe(context.supabase, data.id);
+    const project = projRes.rows[0] ?? null;
     if (!project) throw new Error("This project is not visible to you.");
+
+    if (!actor.permissions.includes("projects:read:all")) {
+      const scope = await resolveSupervisorScope(context.supabase, context.userId, actor.roles);
+      if (!scope.scopedProjectIds.has(project.id)) {
+        throw new Error("This project is not visible to you.");
+      }
+    }
 
     const [{ data: leads }, { data: allocations }, { data: people }] = await Promise.all([
       context.supabase.from("project_team_leads").select("id, lead_id").eq("project_id", data.id),
@@ -86,6 +118,7 @@ export const getProject = createServerFn({ method: "GET" })
     // roster never renders blank; work_email stays RLS-scoped on purpose.
     const fallback = await loadProfileNames(context.supabase, [
       project.project_lead_id,
+      project.project_manager_id,
       ...(leads ?? []).map((l) => l.lead_id),
       ...(allocations ?? []).flatMap((a) => [a.user_id, a.reporting_lead_id]),
     ]);
@@ -108,6 +141,7 @@ export const getProject = createServerFn({ method: "GET" })
     return {
       project,
       projectLead: personOf(project.project_lead_id),
+      projectManager: personOf(project.project_manager_id),
       teamLeads: (leads ?? []).map((l) => ({
         rowId: l.id,
         ...(personOf(l.lead_id) ?? {
@@ -137,35 +171,66 @@ export const createProject = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    await requirePermission(context.supabase, context.userId, "projects:manage:all");
+    const canAll = await hasPermission(context.supabase, context.userId, "projects:manage:all");
 
-    const { data: created, error } = await context.supabase
+    let effectiveManagerId = data.projectManagerId || null;
+    if (!canAll) {
+      await requirePermission(context.supabase, context.userId, "projects:manage:team");
+      if (!effectiveManagerId) effectiveManagerId = context.userId;
+      if (data.departmentId) {
+        const deptMgrs = await selectDepartmentManagersSafe(context.supabase);
+        const isDeptMgr = deptMgrs.rows.some(
+          (r) => r.department_id === data.departmentId && r.manager_id === context.userId,
+        );
+        if (!isDeptMgr && effectiveManagerId !== context.userId) {
+          throw new Error("Forbidden: you can only create projects within your assigned departments.");
+        }
+      }
+    }
+
+    const baseInsert = {
+      code: data.code.trim().toUpperCase(),
+      name: data.name.trim(),
+      client_name: data.clientName?.trim() || null,
+      description: data.description?.trim() || null,
+      start_date: data.startDate || null,
+      end_date: data.endDate || null,
+      project_lead_id: data.projectLeadId || null,
+      work_mode: (data.workMode ?? "remote") as "onsite" | "remote" | "hybrid",
+      shift: isProjectShift(data.shift?.trim()) ? (data.shift!.trim() as ProjectShiftValue) : null,
+      task_unit: isTaskUnit(data.taskUnit?.trim()) ? data.taskUnit!.trim() : "task",
+      hourly_task_target: data.hourlyTaskTarget ?? null,
+      daily_task_target: data.dailyTaskTarget ?? null,
+      quality_target_pct: data.qualityTargetPct ?? null,
+      max_rejection_rate_pct: data.maxRejectionRatePct ?? null,
+      required_headcount: data.requiredHeadcount ?? 0,
+      status: (data.status ?? "active") as "draft" | "active" | "on_hold" | "completed" | "archived",
+      created_by: context.userId,
+    };
+
+    let { data: created, error } = await context.supabase
       .from("projects")
       .insert({
-        code: data.code.trim().toUpperCase(),
-        name: data.name.trim(),
-        client_name: data.clientName?.trim() || null,
-        description: data.description?.trim() || null,
-        start_date: data.startDate || null,
-        end_date: data.endDate || null,
-        project_lead_id: data.projectLeadId || null,
-        work_mode: (data.workMode ?? "remote") as "onsite" | "remote" | "hybrid",
-        shift: isProjectShift(data.shift?.trim()) ? (data.shift!.trim() as ProjectShiftValue) : null,
-        task_unit: isTaskUnit(data.taskUnit?.trim()) ? data.taskUnit!.trim() : "task",
-        hourly_task_target: data.hourlyTaskTarget ?? null,
-        daily_task_target: data.dailyTaskTarget ?? null,
-        quality_target_pct: data.qualityTargetPct ?? null,
-        max_rejection_rate_pct: data.maxRejectionRatePct ?? null,
-        required_headcount: data.requiredHeadcount ?? 0,
-        status: (data.status ?? "active") as "draft" | "active" | "on_hold" | "completed" | "archived",
-        created_by: context.userId,
+        ...baseInsert,
+        department_id: data.departmentId || null,
+        project_manager_id: effectiveManagerId,
       })
       .select("id, code, name")
       .single();
 
-    if (error) {
-      if (error.code === "23505") throw new Error("That project code is already in use.");
-      throw error;
+    if (error && isMissingSchemaResourceError(error)) {
+      const retry = await context.supabase
+        .from("projects")
+        .insert(baseInsert)
+        .select("id, code, name")
+        .single();
+      created = retry.data;
+      error = retry.error;
+    }
+
+    if (error || !created) {
+      if (error?.code === "23505") throw new Error("That project code is already in use.");
+      throw error ?? new Error("Failed to create project.");
     }
 
     const teamLeadIds = (data.teamLeadIds ?? []).filter(Boolean);
@@ -194,7 +259,7 @@ export const updateProjectStatus = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    await requirePermission(context.supabase, context.userId, "projects:manage:all");
+    await requireProjectManage(context.supabase, context.userId, data.id);
     const { error } = await context.supabase
       .from("projects")
       .update({ status: data.status as "draft" | "active" | "on_hold" | "completed" | "archived" })
@@ -207,5 +272,98 @@ export const updateProjectStatus = createServerFn({ method: "POST" })
       entityId: data.id,
       detail: { status: data.status },
     });
+    return { ok: true };
+  });
+
+export const updateProject = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    (input: {
+      id: string;
+      name: string;
+      clientName?: string | null;
+      description?: string | null;
+      departmentId?: string | null;
+      projectManagerId?: string | null;
+      startDate?: string | null;
+      endDate?: string | null;
+      projectLeadId?: string | null;
+      workMode?: string;
+      shift?: string | null;
+      taskUnit?: string;
+      hourlyTaskTarget?: number | null;
+      dailyTaskTarget?: number | null;
+      qualityTargetPct?: number | null;
+      maxRejectionRatePct?: number | null;
+      requiredHeadcount?: number;
+      status?: string;
+      teamLeadIds?: string[];
+    }) => {
+      if (!input?.id) throw new Error("A project id is required.");
+      if (!input?.name?.trim()) throw new Error("A project name is required.");
+      if (input.startDate && input.endDate && input.endDate < input.startDate) {
+        throw new Error("The end date cannot be before the start date.");
+      }
+      return input;
+    },
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await requireProjectManage(supabase, userId, data.id);
+
+    const basePatch = {
+      name: data.name.trim(),
+      client_name: data.clientName?.trim() || null,
+      description: data.description?.trim() || null,
+      start_date: data.startDate || null,
+      end_date: data.endDate || null,
+      project_lead_id: data.projectLeadId || null,
+      work_mode: (data.workMode ?? "remote") as "onsite" | "remote" | "hybrid",
+      shift: isProjectShift(data.shift?.trim()) ? (data.shift!.trim() as ProjectShiftValue) : null,
+      task_unit: isTaskUnit(data.taskUnit?.trim()) ? data.taskUnit!.trim() : "task",
+      hourly_task_target: data.hourlyTaskTarget ?? null,
+      daily_task_target: data.dailyTaskTarget ?? null,
+      quality_target_pct: data.qualityTargetPct ?? null,
+      max_rejection_rate_pct: data.maxRejectionRatePct ?? null,
+      required_headcount: data.requiredHeadcount ?? 0,
+      ...(data.status
+        ? { status: data.status as "draft" | "active" | "on_hold" | "completed" | "archived" }
+        : {}),
+    };
+
+    const patch = {
+      ...basePatch,
+      ...(data.departmentId !== undefined ? { department_id: data.departmentId || null } : {}),
+      ...(data.projectManagerId !== undefined
+        ? { project_manager_id: data.projectManagerId || null }
+        : {}),
+    };
+
+    let { error } = await supabase.from("projects").update(patch).eq("id", data.id);
+    if (error && isMissingSchemaResourceError(error)) {
+      const retry = await supabase.from("projects").update(basePatch).eq("id", data.id);
+      error = retry.error;
+    }
+    if (error) throw error;
+
+    if (Array.isArray(data.teamLeadIds)) {
+      await supabase.from("project_team_leads").delete().eq("project_id", data.id);
+      const uniqueLeads = [...new Set(data.teamLeadIds.filter(Boolean))];
+      if (uniqueLeads.length > 0) {
+        const { error: leadErr } = await supabase
+          .from("project_team_leads")
+          .insert(uniqueLeads.map((leadId) => ({ project_id: data.id, lead_id: leadId })));
+        if (leadErr) throw leadErr;
+      }
+    }
+
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "project.updated",
+      entityType: "project",
+      entityId: data.id,
+      detail: { ...patch, teamLeadIds: data.teamLeadIds },
+    });
+
     return { ok: true };
   });

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-quer
 import { useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
+import { AUTOMATION_HUB_TABS, HubSubNav } from "@/components/hub-subnav";
 import { actorQueryOptions } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +16,16 @@ import {
   stageImportBatch,
   type SheetPayload,
 } from "@/lib/import.functions";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -63,6 +74,9 @@ function ImportPage() {
   const [sheets, setSheets] = useState<SheetDraft[]>([]);
   const [activeBatch, setActiveBatch] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [committing, setCommitting] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"invite" | "commit" | null>(null);
 
   const { data: projects } = useQuery({
     queryKey: ["import-projects"],
@@ -109,6 +123,7 @@ function ImportPage() {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not read that workbook.");
     } finally {
+      event.target.value = "";
       setBusy(false);
     }
   }
@@ -145,55 +160,66 @@ function ImportPage() {
   }
 
   async function invite() {
-    setBusy(true);
+    setInviting(true);
     try {
       const result = await inviteImportedPeople({ data: { batchId: activeBatch! } });
       toast.success(`${result.queued} invitation(s) queued for throttled sending.`);
+      setConfirmAction(null);
       await queryClient.invalidateQueries({ queryKey: ["import-batch", activeBatch] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not queue invitations.");
     } finally {
-      setBusy(false);
+      setInviting(false);
     }
   }
 
   async function commit() {
-    setBusy(true);
+    setCommitting(true);
     try {
       const result = await commitImport({ data: { batchId: activeBatch! } });
       toast.success(
         `Committed ${result.attendanceRows} attendance row(s) and ${result.calendarRows} calendar entr(ies).`,
       );
       if (result.notes.length > 0) toast.message(result.notes.join(" "));
+      setConfirmAction(null);
       await queryClient.invalidateQueries({ queryKey: ["import-batch", activeBatch] });
       await queryClient.invalidateQueries({ queryKey: ["import-batches"] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Commit failed.");
     } finally {
-      setBusy(false);
+      setCommitting(false);
     }
   }
 
   const rows = batch?.rows ?? [];
   const unmapped = rows.filter((r) => r.resolution === "pending");
+  const createNewCount = rows.filter((r) => r.resolution === "create_new").length;
+  const anyBusy = busy || inviting || committing;
 
   return (
     <AppShell
       title="Legacy import"
       description="Historical attendance lands with source = import: it is visible in history but never triggers a live automation rule."
     >
+      <HubSubNav tabs={AUTOMATION_HUB_TABS} />
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>1 · Upload a workbook</CardTitle>
+            <CardTitle className="text-base">1 · Upload a workbook</CardTitle>
             <CardDescription>
               One sheet per project, one row per person, one column per date.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               <Label htmlFor="workbook">Excel or CSV file</Label>
-              <Input id="workbook" type="file" accept=".xlsx,.xls,.csv" onChange={onFile} />
+              <Input
+                id="workbook"
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                disabled={anyBusy}
+                onChange={onFile}
+              />
             </div>
 
             {sheets.length > 0 && (
@@ -201,7 +227,12 @@ function ImportPage() {
                 <p className="text-sm font-medium">2 · Map each sheet to a project</p>
                 {sheets.map((sheet, index) => (
                   <div key={sheet.name} className="flex flex-wrap items-center gap-3">
-                    <span className="min-w-40 text-sm">{sheet.name}</span>
+                    <Label
+                      htmlFor={`sheet-project-${index}`}
+                      className="min-w-40 text-sm font-normal"
+                    >
+                      {sheet.name}
+                    </Label>
                     <Select
                       value={sheet.projectId ?? "none"}
                       onValueChange={(value) =>
@@ -212,7 +243,7 @@ function ImportPage() {
                         )
                       }
                     >
-                      <SelectTrigger className="w-72">
+                      <SelectTrigger id={`sheet-project-${index}`} className="w-full sm:w-72">
                         <SelectValue placeholder="Project" />
                       </SelectTrigger>
                       <SelectContent>
@@ -226,7 +257,7 @@ function ImportPage() {
                     </Select>
                   </div>
                 ))}
-                <Button onClick={stage} disabled={busy}>
+                <Button onClick={() => void stage()} disabled={anyBusy}>
                   {busy ? "Parsing…" : "Parse and preview"}
                 </Button>
               </div>
@@ -236,7 +267,7 @@ function ImportPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Batches</CardTitle>
+            <CardTitle className="text-base">Batches</CardTitle>
             <CardDescription>Select a batch to review or commit it.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -246,16 +277,20 @@ function ImportPage() {
               batches.map((b) => (
                 <button
                   key={b.id}
+                  type="button"
+                  aria-pressed={activeBatch === b.id}
                   onClick={() => setActiveBatch(b.id)}
-                  className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-left text-sm ${
-                    activeBatch === b.id ? "border-primary" : ""
+                  className={`flex w-full flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-left text-sm transition-colors hover:bg-muted/40 ${
+                    activeBatch === b.id ? "border-primary bg-primary/5" : ""
                   }`}
                 >
                   <span className="font-medium">{b.file_name}</span>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-xs tabular-nums text-muted-foreground">
                     {b.date_from ?? "—"} → {b.date_to ?? "—"}
                   </span>
-                  <Badge variant={b.status === "committed" ? "secondary" : "outline"}>{b.status}</Badge>
+                  <Badge variant={b.status === "committed" ? "success" : "info"}>
+                    {b.status}
+                  </Badge>
                 </button>
               ))
             )}
@@ -266,23 +301,24 @@ function ImportPage() {
           <>
             <Card>
               <CardHeader>
-                <CardTitle>3 · Preview</CardTitle>
+                <CardTitle className="text-base">3 · Preview</CardTitle>
                 <CardDescription>
                   {rows.length} people ·{" "}
                   {Object.entries(batch.cellCounts)
                     .map(([kind, count]) => `${count} ${kind}`)
                     .join(" · ")}
+                  {rows.length > 100 ? " · showing first 100 rows" : ""}
                 </CardDescription>
               </CardHeader>
               <CardContent className="overflow-x-auto">
                 <table className="w-full min-w-[720px] text-sm">
                   <thead>
                     <tr className="border-b text-left text-xs uppercase text-muted-foreground">
-                      <th className="p-2">Person</th>
-                      <th className="p-2">Identifier</th>
-                      <th className="p-2">DOJ / LWD</th>
-                      <th className="p-2">Cells</th>
-                      <th className="p-2">Match</th>
+                      <th scope="col" className="p-2">Person</th>
+                      <th scope="col" className="p-2">Identifier</th>
+                      <th scope="col" className="p-2">DOJ / LWD</th>
+                      <th scope="col" className="p-2">Cells</th>
+                      <th scope="col" className="p-2">Match</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -290,11 +326,17 @@ function ImportPage() {
                       const cells = batch.cells.filter((c) => c.row_id === row.id);
                       const invalid = cells.filter((c) => c.mapped_kind === "invalid").length;
                       const issues = row.date_issues as Record<string, string>;
+                      const resVariant =
+                        row.resolution === "pending"
+                          ? "warning"
+                          : row.resolution === "skipped"
+                            ? "neutral"
+                            : "success";
                       return (
                         <tr key={row.id} className="border-b align-top">
                           <td className="p-2 font-medium">{row.raw_name || "—"}</td>
                           <td className="p-2 text-muted-foreground">{row.raw_identifier || "—"}</td>
-                          <td className="p-2 text-xs">
+                          <td className="p-2 text-xs tabular-nums">
                             {row.parsed_doj ?? row.raw_doj ?? "—"} / {row.parsed_lwd ?? row.raw_lwd ?? "—"}
                             {Object.values(issues ?? {}).map((issue) => (
                               <p key={issue} className="text-destructive">
@@ -302,18 +344,14 @@ function ImportPage() {
                               </p>
                             ))}
                           </td>
-                          <td className="p-2 text-xs">
+                          <td className="p-2 text-xs tabular-nums">
                             {cells.length} parsed
                             {invalid > 0 && (
                               <span className="text-destructive"> · {invalid} unreadable</span>
                             )}
                           </td>
                           <td className="p-2">
-                            <Badge
-                              variant={row.resolution === "pending" ? "destructive" : "secondary"}
-                            >
-                              {row.resolution}
-                            </Badge>
+                            <Badge variant={resVariant}>{row.resolution}</Badge>
                           </td>
                         </tr>
                       );
@@ -325,7 +363,7 @@ function ImportPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>4 · Manual mapping queue</CardTitle>
+                <CardTitle className="text-base">4 · Manual mapping queue</CardTitle>
                 <CardDescription>
                   {unmapped.length} row(s) could not be matched automatically. Nothing commits for
                   them until you decide.
@@ -343,8 +381,11 @@ function ImportPage() {
                           {row.raw_identifier || "no identifier"} — {row.match_reason}
                         </p>
                       </div>
-                      <Select onValueChange={(value) => resolve(row.id, "mapped", value)}>
-                        <SelectTrigger className="w-72">
+                      <Label htmlFor={`map-row-${row.id}`} className="sr-only">
+                        Map {row.raw_name || "row"} to an existing account
+                      </Label>
+                      <Select onValueChange={(value) => void resolve(row.id, "mapped", value)}>
+                        <SelectTrigger id={`map-row-${row.id}`} className="w-full sm:w-72">
                           <SelectValue placeholder="Map to an existing account" />
                         </SelectTrigger>
                         <SelectContent>
@@ -355,10 +396,18 @@ function ImportPage() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button size="sm" variant="secondary" onClick={() => resolve(row.id, "create_new")}>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void resolve(row.id, "create_new")}
+                      >
                         Invite as new
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => resolve(row.id, "skipped")}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void resolve(row.id, "skipped")}
+                      >
                         Skip
                       </Button>
                     </div>
@@ -369,24 +418,92 @@ function ImportPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>5 · Invite and commit</CardTitle>
+                <CardTitle className="text-base">5 · Invite and commit</CardTitle>
                 <CardDescription>
                   New people go through the normal throttled invitation queue and appear in Workforce
                   with an unassigned reporting lead.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-3">
-                <Button variant="secondary" onClick={invite} disabled={busy}>
-                  Queue invitations
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmAction("invite")}
+                  disabled={anyBusy || createNewCount === 0}
+                >
+                  {inviting ? "Queueing…" : `Queue invitations (${createNewCount})`}
                 </Button>
-                <Button onClick={commit} disabled={busy}>
-                  {busy ? "Working…" : "Commit batch"}
+                <Button
+                  onClick={() => setConfirmAction("commit")}
+                  disabled={anyBusy || batch.batch.status === "committed"}
+                >
+                  {committing
+                    ? "Committing…"
+                    : batch.batch.status === "committed"
+                      ? "Batch committed"
+                      : "Commit batch"}
                 </Button>
               </CardContent>
             </Card>
           </>
         )}
       </div>
+
+      <AlertDialog
+        open={confirmAction !== null}
+        onOpenChange={(o) => !o && setConfirmAction(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === "invite"
+                ? `Queue ${createNewCount} invitation(s)?`
+                : `Commit import batch (${batch?.batch?.file_name ?? "workbook"})?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === "invite" ? (
+                <>
+                  This will queue <span className="font-medium text-foreground">{createNewCount}</span>{" "}
+                  onboarding invitation(s) for rows marked as{" "}
+                  <span className="font-medium text-foreground">create_new</span> via the throttled
+                  invitation dispatcher.
+                </>
+              ) : (
+                <>
+                  Historical attendance and calendar entries for all mapped rows in{" "}
+                  <span className="font-medium text-foreground">{batch?.batch?.file_name}</span>{" "}
+                  will be written with <code className="text-xs">source = import</code>.
+                  {unmapped.length > 0 ? (
+                    <span className="mt-2 block font-medium text-warning">
+                      Warning: {unmapped.length} row(s) are still pending manual mapping and will not
+                      be committed.
+                    </span>
+                  ) : null}
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={anyBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={anyBusy}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmAction === "invite") {
+                  void invite();
+                } else if (confirmAction === "commit") {
+                  void commit();
+                }
+              }}
+            >
+              {inviting || committing
+                ? "Processing…"
+                : confirmAction === "invite"
+                  ? "Queue invitations"
+                  : "Commit batch"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

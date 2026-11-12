@@ -1,30 +1,47 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { CheckCircle2, Upload, XCircle, Clock } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
+import {
+  EmploymentDetailsSection,
+  PersonalInfoSection,
+  ProfileIdentityHeader,
+  ReportingStructureSection,
+  SelfDocumentsSection,
+  SelfSecuritySection,
+  WorkAssignmentsSection,
+  type PersonalFormValues,
+} from "@/components/profile/unified-profile-sections";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
-import { getMyProfile, submitProfileForVerification, updateMyProfile } from "@/lib/workforce.functions";
+import { supabase } from "@/integrations/supabase/client";
 import {
   createDocumentUploadUrl,
   listMyDocuments,
   registerDocument,
 } from "@/lib/documents.functions";
-import { supabase } from "@/integrations/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ACCOUNT_STATUS_LABELS,
-  DOCUMENT_TYPES,
   DOCUMENT_TYPE_LABELS,
-  REQUIRED_DOCUMENT_TYPES,
   type DocumentType,
 } from "@/lib/permissions";
+import {
+  changeMyPassword,
+  getMyUnifiedProfile,
+  submitProfileForVerification,
+  updateMyProfile,
+} from "@/lib/workforce.functions";
 
 export const Route = createFileRoute("/_authenticated/onboarding")({
   head: () => ({
@@ -33,48 +50,84 @@ export const Route = createFileRoute("/_authenticated/onboarding")({
       {
         name: "description",
         content:
-          "Complete your employee profile and upload onboarding documents for HR verification.",
+          "Unified employee profile, reporting hierarchy, assignments, onboarding documents, and security settings.",
       },
       { property: "og:title", content: "My Profile | The AI School HRM" },
-      { property: "og:description", content: "Employee onboarding and document upload." },
+      { property: "og:description", content: "Unified profile and onboarding workspace." },
     ],
   }),
   loader: ({ context }) => context.queryClient.ensureQueryData(actorQueryOptions),
   component: OnboardingPage,
 });
 
+function buildPersonalForm(profile: {
+  full_name: string | null;
+  personal_email: string | null;
+  mobile: string | null;
+  date_of_birth: string | null;
+  current_address: string | null;
+  permanent_address: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  skills: string[] | null;
+  institution: string | null;
+  experience_years: number | null;
+}): PersonalFormValues {
+  return {
+    fullName: profile.full_name ?? "",
+    personalEmail: profile.personal_email ?? "",
+    mobile: profile.mobile ?? "",
+    dateOfBirth: profile.date_of_birth ?? "",
+    currentAddress: profile.current_address ?? "",
+    permanentAddress: profile.permanent_address ?? "",
+    emergencyContactName: profile.emergency_contact_name ?? "",
+    emergencyContactPhone: profile.emergency_contact_phone ?? "",
+    skills: (profile.skills ?? []).join(", "),
+    institution: profile.institution ?? "",
+    experienceYears: profile.experience_years?.toString() ?? "",
+  };
+}
+
 function OnboardingPage() {
   const actor = useActor();
   const queryClient = useQueryClient();
-  const { data: profile } = useSuspenseQuery({
-    queryKey: ["my-profile"],
-    queryFn: () => getMyProfile(),
+  const { data } = useSuspenseQuery({
+    queryKey: ["my-unified-profile", actor.userId],
+    queryFn: () => getMyUnifiedProfile(),
   });
 
-  const locked = actor.accountStatus === "under_verification";
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    fullName: profile?.full_name ?? "",
-    personalEmail: profile?.personal_email ?? "",
-    mobile: profile?.mobile ?? "",
-    dateOfBirth: profile?.date_of_birth ?? "",
-    currentAddress: profile?.current_address ?? "",
-    permanentAddress: profile?.permanent_address ?? "",
-    emergencyContactName: profile?.emergency_contact_name ?? "",
-    emergencyContactPhone: profile?.emergency_contact_phone ?? "",
-    skills: (profile?.skills ?? []).join(", "),
-    institution: profile?.institution ?? "",
-    experienceYears: profile?.experience_years?.toString() ?? "",
-    availableHoursPerDay: profile?.available_hours_per_day?.toString() ?? "",
+  const profile = data.profile;
+  const canEditSelf = actor.can("workforce:update:self");
+  const canUploadSelf = actor.can("documents:upload:self") && !data.isExecutiveGovernance;
+  const isFounderOnly =
+    actor.roles.includes("founder") && !actor.roles.some((r) => r !== "founder");
+  const locked = actor.accountStatus === "under_verification" || !canEditSelf;
+
+  const docsQuery = useQuery({
+    queryKey: ["my-documents"],
+    queryFn: () => listMyDocuments(),
+    enabled: canUploadSelf,
   });
 
-  function set(key: keyof typeof form, value: string) {
+  const [savingPersonal, setSavingPersonal] = useState(false);
+  const [submittingVerification, setSubmittingVerification] = useState(false);
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
+
+  const [form, setForm] = useState<PersonalFormValues>(() => buildPersonalForm(profile));
+  const savedSnapshot = buildPersonalForm(profile);
+  const hasUnsavedChanges = (Object.keys(form) as (keyof PersonalFormValues)[]).some(
+    (k) => form[k] !== savedSnapshot[k],
+  );
+
+  function handleFormChange(key: keyof PersonalFormValues, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function save(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving(true);
+  async function savePersonal(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingPersonal(true);
     try {
       await updateMyProfile({
         data: {
@@ -87,222 +140,45 @@ function OnboardingPage() {
           emergencyContactName: form.emergencyContactName || null,
           emergencyContactPhone: form.emergencyContactPhone || null,
           skills: form.skills
-            ? form.skills.split(",").map((s) => s.trim()).filter(Boolean)
+            ? form.skills
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
             : [],
           institution: form.institution || null,
           experienceYears: form.experienceYears ? Number(form.experienceYears) : null,
-          availableHoursPerDay: form.availableHoursPerDay
-            ? Number(form.availableHoursPerDay)
-            : null,
         },
       });
-      toast.success("Profile saved.");
-      await queryClient.invalidateQueries();
+      toast.success("Personal details saved.");
+      await queryClient.invalidateQueries({ queryKey: ["my-unified-profile", actor.userId] });
+      await queryClient.invalidateQueries({ queryKey: ["actor"] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save your profile.");
     } finally {
-      setSaving(false);
+      setSavingPersonal(false);
     }
   }
 
-  async function submit() {
-    setSaving(true);
+  async function submitVerification() {
+    setSubmittingVerification(true);
     try {
       const result = await submitProfileForVerification();
       if (!result.ok) {
         toast.error(`Still missing: ${result.missing.join(", ")}`);
         return;
       }
-      toast.success("Sent to HR for verification.");
+      setConfirmSubmitOpen(false);
+      toast.success("Profile submitted to HR for verification.");
       await queryClient.invalidateQueries();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not submit your profile.");
     } finally {
-      setSaving(false);
+      setSubmittingVerification(false);
     }
   }
 
-  return (
-    <AppShell
-      title="My profile"
-      description="Employee record and onboarding documents"
-      actions={<Badge variant="outline">{ACCOUNT_STATUS_LABELS[actor.accountStatus]}</Badge>}
-    >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Personal details</CardTitle>
-            <CardDescription>
-              {locked
-                ? "Your profile is locked while HR verifies it."
-                : "HR verifies these details, so keep them accurate."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={save} className="grid gap-4 sm:grid-cols-2">
-              <Field label="Full name" required>
-                <Input
-                  value={form.fullName}
-                  disabled={locked}
-                  onChange={(e) => set("fullName", e.target.value)}
-                  required
-                />
-              </Field>
-              <Field label="Work email">
-                <Input value={profile?.work_email ?? ""} disabled />
-              </Field>
-              <Field label="Employee ID">
-                <Input
-                  value={profile?.employee_code || "Assigned when your account is provisioned"}
-                  disabled
-                  className="font-mono font-medium"
-                />
-              </Field>
-              <Field label="Personal email" required>
-                <Input
-                  type="email"
-                  value={form.personalEmail}
-                  disabled={locked}
-                  onChange={(e) => set("personalEmail", e.target.value)}
-                />
-              </Field>
-              <Field label="Mobile" required>
-                <Input
-                  value={form.mobile}
-                  disabled={locked}
-                  onChange={(e) => set("mobile", e.target.value)}
-                />
-              </Field>
-              <Field label="Date of birth">
-                <Input
-                  type="date"
-                  value={form.dateOfBirth}
-                  disabled={locked}
-                  onChange={(e) => set("dateOfBirth", e.target.value)}
-                />
-              </Field>
-              <Field label="Institution / College">
-                <Input
-                  value={form.institution}
-                  disabled={locked}
-                  onChange={(e) => set("institution", e.target.value)}
-                />
-              </Field>
-              <Field label="Years of experience">
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={form.experienceYears}
-                  disabled={locked}
-                  onChange={(e) => set("experienceYears", e.target.value)}
-                />
-              </Field>
-              <Field label="Available hours per day">
-                <Input
-                  type="number"
-                  min="1"
-                  max="24"
-                  value={form.availableHoursPerDay}
-                  disabled={locked}
-                  onChange={(e) => set("availableHoursPerDay", e.target.value)}
-                />
-              </Field>
-              <Field label="Skills (comma separated)" className="sm:col-span-2">
-                <Input
-                  value={form.skills}
-                  disabled={locked}
-                  onChange={(e) => set("skills", e.target.value)}
-                  placeholder="Python, Prompt engineering, Curriculum design"
-                />
-              </Field>
-              <Field label="Current address" className="sm:col-span-2">
-                <Textarea
-                  rows={2}
-                  value={form.currentAddress}
-                  disabled={locked}
-                  onChange={(e) => set("currentAddress", e.target.value)}
-                />
-              </Field>
-              <Field label="Permanent address" className="sm:col-span-2">
-                <Textarea
-                  rows={2}
-                  value={form.permanentAddress}
-                  disabled={locked}
-                  onChange={(e) => set("permanentAddress", e.target.value)}
-                />
-              </Field>
-              <Field label="Emergency contact name">
-                <Input
-                  value={form.emergencyContactName}
-                  disabled={locked}
-                  onChange={(e) => set("emergencyContactName", e.target.value)}
-                />
-              </Field>
-              <Field label="Emergency contact phone">
-                <Input
-                  value={form.emergencyContactPhone}
-                  disabled={locked}
-                  onChange={(e) => set("emergencyContactPhone", e.target.value)}
-                />
-              </Field>
-              <div className="flex gap-2 sm:col-span-2">
-                <Button type="submit" disabled={saving || locked}>
-                  Save details
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={saving || locked || actor.accountStatus === "active"}
-                  onClick={submit}
-                >
-                  Submit for verification
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        <DocumentsPanel locked={locked} />
-      </div>
-    </AppShell>
-  );
-}
-
-function Field({
-  label,
-  children,
-  required,
-  className,
-}: {
-  label: string;
-  children: React.ReactNode;
-  required?: boolean;
-  className?: string;
-}) {
-  return (
-    <div className={`space-y-1.5 ${className ?? ""}`}>
-      <Label className="text-xs font-medium text-muted-foreground">
-        {label}
-        {required ? <span className="ml-0.5 text-primary">*</span> : null}
-      </Label>
-      {children}
-    </div>
-  );
-}
-
-function DocumentsPanel({ locked }: { locked: boolean }) {
-  const queryClient = useQueryClient();
-  const { data: documents } = useSuspenseQuery({
-    queryKey: ["my-documents"],
-    queryFn: () => listMyDocuments(),
-  });
-  const [uploading, setUploading] = useState<string | null>(null);
-
-  const byType = new Map(documents.map((d) => [d.doc_type, d]));
-
-  async function upload(docType: DocumentType, file: File) {
-    setUploading(docType);
+  async function handleUploadDocument(docType: DocumentType, file: File) {
+    setUploadingDoc(docType);
     try {
       const { path, token } = await createDocumentUploadUrl({
         data: { docType, fileName: file.name },
@@ -313,74 +189,145 @@ function DocumentsPanel({ locked }: { locked: boolean }) {
       if (error) throw error;
       await registerDocument({ data: { docType, path, fileName: file.name } });
       toast.success(`${DOCUMENT_TYPE_LABELS[docType]} uploaded.`);
-      await queryClient.invalidateQueries();
+      await queryClient.invalidateQueries({ queryKey: ["my-documents"] });
+      await queryClient.invalidateQueries({ queryKey: ["role-dashboard", actor.userId] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Upload failed.");
     } finally {
-      setUploading(null);
+      setUploadingDoc(null);
+    }
+  }
+
+  async function handleChangePassword(newPassword: string): Promise<boolean> {
+    setChangingPassword(true);
+    try {
+      await changeMyPassword({ data: { newPassword } });
+      toast.success("Your password has been updated.");
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update password.");
+      return false;
+    } finally {
+      setChangingPassword(false);
     }
   }
 
   return (
-    <Card className="h-fit">
-      <CardHeader>
-        <CardTitle className="text-base">Documents</CardTitle>
-        <CardDescription>
-          Stored privately. Only you and HR verifiers can open these files.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {DOCUMENT_TYPES.map((docType) => {
-          const doc = byType.get(docType);
-          const required = REQUIRED_DOCUMENT_TYPES.includes(docType);
-          return (
-            <div
-              key={docType}
-              className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">
-                  {DOCUMENT_TYPE_LABELS[docType]}
-                  {required ? <span className="ml-1 text-primary">*</span> : null}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {doc ? doc.file_name : "Not uploaded"}
-                </p>
-                {doc?.status === "rejected" && doc.review_note ? (
-                  <p className="truncate text-xs text-destructive">{doc.review_note}</p>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {doc ? <StatusIcon status={doc.status} /> : null}
-                {!locked ? (
-                  <label className="cursor-pointer">
-                    <input
-                      type="file"
-                      className="sr-only"
-                      accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void upload(docType, file);
-                        e.target.value = "";
-                      }}
-                    />
-                    <span className="inline-flex items-center gap-1 rounded-md border border-input px-2 py-1 text-xs hover:bg-accent">
-                      <Upload className="size-3" />
-                      {uploading === docType ? "…" : doc ? "Replace" : "Upload"}
-                    </span>
-                  </label>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-      </CardContent>
-    </Card>
-  );
-}
+    <AppShell
+      title="My Profile"
+      description="Unified personal details, employment classification, reporting line, work assignments, documents, and security."
+      actions={
+        !data.isExecutiveGovernance ? (
+          <Badge variant={actor.accountStatus === "active" ? "success" : "warning"}>
+            {ACCOUNT_STATUS_LABELS[actor.accountStatus]}
+          </Badge>
+        ) : undefined
+      }
+    >
+      <div className="space-y-6">
+        <ProfileIdentityHeader
+          fullName={profile.full_name}
+          workEmail={profile.work_email}
+          employeeCode={profile.employee_code}
+          photoUrl={profile.photo_url}
+          designation={profile.designation}
+          departmentName={data.department?.name ?? null}
+          category={profile.category}
+          accountStatus={profile.account_status}
+          employmentStatus={profile.employment_status}
+          roles={data.roles}
+          isExecutiveGovernance={data.isExecutiveGovernance}
+        />
 
-function StatusIcon({ status }: { status: string }) {
-  if (status === "verified") return <CheckCircle2 className="size-4 text-success" />;
-  if (status === "rejected") return <XCircle className="size-4 text-destructive" />;
-  return <Clock className="size-4 text-muted-foreground" />;
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+          <div className="space-y-6">
+            <PersonalInfoSection
+              mode="self"
+              profile={profile}
+              canEditSelf={canEditSelf}
+              locked={locked}
+              saving={savingPersonal}
+              submittingVerification={submittingVerification}
+              isExecutiveGovernance={data.isExecutiveGovernance}
+              form={form}
+              onFormChange={handleFormChange}
+              onSave={savePersonal}
+              onSubmitForVerification={() => setConfirmSubmitOpen(true)}
+            />
+
+            <EmploymentDetailsSection
+              profile={profile}
+              departmentName={data.department?.name ?? null}
+              roles={data.roles}
+            />
+
+            <ReportingStructureSection
+              department={data.department}
+              reportingLead={data.reportingLead}
+              managedDepartments={data.managedDepartments}
+              directReportsCount={data.directReportsCount}
+              missingReportingLead={data.missingReportingLead}
+              canLinkProfiles={
+                actor.can("workforce:read:all") || actor.can("workforce:read:team")
+              }
+            />
+
+            <WorkAssignmentsSection
+              allocations={data.allocations}
+              isExecutiveGovernance={data.isExecutiveGovernance}
+              isSelf
+            />
+          </div>
+
+          <div className="space-y-6">
+            {canUploadSelf && (
+              <SelfDocumentsSection
+                documents={docsQuery.data ?? []}
+                locked={locked}
+                uploadingDocType={uploadingDoc}
+                isLoading={docsQuery.isPending}
+                isError={docsQuery.isError}
+                onRetry={() => void docsQuery.refetch()}
+                onUploadFile={handleUploadDocument}
+              />
+            )}
+
+            <SelfSecuritySection
+              workEmail={profile.work_email}
+              readOnlyExecutive={isFounderOnly}
+              busy={changingPassword}
+              onChangePassword={handleChangePassword}
+            />
+          </div>
+        </div>
+      </div>
+
+      <AlertDialog open={confirmSubmitOpen} onOpenChange={setConfirmSubmitOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Submit profile for HR verification?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {hasUnsavedChanges
+                ? "You have unsaved edits in your Personal Information form. Please click 'Save personal details' first before submitting, otherwise only previously saved fields will be verified."
+                : "Submitting locks your personal details and KYC document uploads while HR reviews your onboarding submission."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={submittingVerification}>Cancel</AlertDialogCancel>
+            {!hasUnsavedChanges && (
+              <AlertDialogAction
+                disabled={submittingVerification}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void submitVerification();
+                }}
+              >
+                {submittingVerification ? "Submitting…" : "Submit & lock profile"}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </AppShell>
+  );
 }

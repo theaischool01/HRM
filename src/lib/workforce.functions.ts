@@ -1,7 +1,18 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { requirePermission, requireSelfOrPermission, rethrowDbError } from "./actor.server";
+import { hasPermission, loadActor, requirePermission, rethrowDbError } from "./actor.server";
+import {
+  canAccessEmployeeDocuments,
+  canViewEmployeeSensitivePii,
+  isExecutiveGovernanceOnly,
+} from "./permissions";
+import { loadProfileNames } from "./profile-names.server";
 import { needsReportingLead } from "./request-routing";
+import {
+  isMissingSchemaResourceError,
+  resolveSupervisorScope,
+  selectDepartmentManagersSafe,
+} from "./schema-compat.server";
 
 
 const PROFILE_SELECT =
@@ -29,15 +40,21 @@ export type ProfileDraft = {
 export const getOrgReference = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const [{ data: departments }, { data: leads }] = await Promise.all([
-      context.supabase.from("departments").select("id, name, code").order("name"),
+    const [{ data: departments }, { data: leads }, deptMgrRes] = await Promise.all([
+      context.supabase.from("departments").select("id, name, code, description").order("name"),
       context.supabase
         .from("profiles")
         .select("id, full_name, designation")
         .eq("employment_status", "active")
         .order("full_name"),
+      selectDepartmentManagersSafe(context.supabase),
     ]);
-    return { departments: departments ?? [], people: leads ?? [] };
+    return {
+      departments: departments ?? [],
+      people: leads ?? [],
+      departmentManagers: deptMgrRes.rows,
+      departmentManagersReady: deptMgrRes.tableExists,
+    };
   });
 
 export const getMyProfile = createServerFn({ method: "GET" })
@@ -52,31 +69,120 @@ export const getMyProfile = createServerFn({ method: "GET" })
     return data;
   });
 
+/** Enriched self-profile bundle for the 6-section Unified Profile view (`/onboarding`). */
+export const getMyUnifiedProfile = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context;
+    const [
+      actor,
+      { data: profile, error },
+      { data: departments },
+      deptMgrRes,
+      { data: directReports },
+      { data: allocations },
+    ] = await Promise.all([
+      loadActor(supabase, userId),
+      supabase.from("profiles").select(PROFILE_SELECT).eq("id", userId).maybeSingle(),
+      supabase.from("departments").select("id, name, code"),
+      selectDepartmentManagersSafe(supabase),
+      supabase
+        .from("profiles")
+        .select("id")
+        .eq("reporting_lead_id", userId)
+        .eq("employment_status", "active"),
+      supabase
+        .from("project_allocations")
+        .select(
+          "id, project_id, role_in_project, start_date, end_date, hours_per_day, allocation_pct, daily_task_target, status, acknowledged_at, projects(id, code, name, work_mode, task_unit, status)",
+        )
+        .eq("user_id", userId)
+        .neq("status", "ended")
+        .order("created_at", { ascending: false }),
+    ]);
+    if (error) rethrowDbError("Loading your profile failed", error);
+    if (!profile) throw new Error("Your profile could not be found.");
+
+    const deptMap = new Map((departments ?? []).map((d) => [d.id, d]));
+    const department = profile.department_id ? (deptMap.get(profile.department_id) ?? null) : null;
+    const managedDepartments = deptMgrRes.rows
+      .filter((dm) => dm.manager_id === userId)
+      .map((dm) => deptMap.get(dm.department_id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d));
+
+    let reportingLead: { id: string; fullName: string; designation: string | null } | null = null;
+    if (profile.reporting_lead_id) {
+      const names = await loadProfileNames(supabase, [profile.reporting_lead_id]);
+      const resolved = names.get(profile.reporting_lead_id);
+      if (resolved) {
+        reportingLead = {
+          id: profile.reporting_lead_id,
+          fullName: resolved.fullName,
+          designation: resolved.designation ?? null,
+        };
+      }
+    }
+
+    return {
+      profile,
+      roles: actor.roles,
+      department,
+      reportingLead,
+      managedDepartments,
+      directReportsCount: (directReports ?? []).length,
+      allocations: allocations ?? [],
+      isExecutiveGovernance: isExecutiveGovernanceOnly(actor.roles),
+      missingReportingLead: needsReportingLead({
+        roles: actor.roles,
+        employmentStatus: profile.employment_status,
+        reportingLeadId: profile.reporting_lead_id,
+      }),
+    };
+  });
+
 /**
- * RLS decides the row set here — Founder/HR see the whole org, a Lead sees
- * their reports plus themselves, an Employee sees only themselves.
+ * RLS + server supervisor scope decides the row set here — Founder/HR/Admin/SA see
+ * the whole org, Manager sees assigned departments/projects/teams, Lead sees direct
+ * reports plus themselves, an Employee sees only themselves.
  */
 export const listWorkforce = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const [{ data: profiles, error }, { data: roles }] = await Promise.all([
-      context.supabase.from("profiles").select(PROFILE_SELECT).order("full_name"),
-      context.supabase.from("user_roles").select("user_id, role"),
-    ]);
+    const actor = await loadActor(context.supabase, context.userId);
+    const [{ data: rawProfiles, error }, { data: roles }, { data: departments }, scope] =
+      await Promise.all([
+        context.supabase.from("profiles").select(PROFILE_SELECT).order("full_name"),
+        context.supabase.from("user_roles").select("user_id, role"),
+        context.supabase.from("departments").select("id, name, code"),
+        actor.permissions.includes("workforce:read:all")
+          ? Promise.resolve(null)
+          : resolveSupervisorScope(context.supabase, context.userId, actor.roles),
+      ]);
     if (error) throw error;
 
+    const profiles = scope
+      ? (rawProfiles ?? []).filter((p) => scope.scopedUserIds.has(p.id))
+      : (rawProfiles ?? []);
+
+    const deptMap = new Map((departments ?? []).map((d) => [d.id, d.name]));
     const roleMap = new Map<string, string[]>();
     for (const row of roles ?? []) {
       roleMap.set(row.user_id, [...(roleMap.get(row.user_id) ?? []), row.role]);
     }
-    return (profiles ?? []).map((profile) => {
+    const allowSensitivePii =
+      actor.roles.includes("super_admin") || actor.roles.includes("hr");
+
+    return profiles.map((profile) => {
       const personRoles = roleMap.get(profile.id) ?? [];
+      const isSelf = profile.id === context.userId;
       return {
         ...profile,
+        personal_email: allowSensitivePii || isSelf ? profile.personal_email : null,
+        date_of_birth: allowSensitivePii || isSelf ? profile.date_of_birth : null,
+        current_address: allowSensitivePii || isSelf ? profile.current_address : null,
+        permanent_address: allowSensitivePii || isSelf ? profile.permanent_address : null,
+        department_name: profile.department_id ? (deptMap.get(profile.department_id) ?? null) : null,
         roles: personRoles,
-        // Staff with no reporting lead cannot submit leave / WFH requests at all —
-        // the dual-tier approval has nobody to route to. Surfaced so HR can fix it
-        // before the person hits the block.
         missingReportingLead: needsReportingLead({
           roles: personRoles,
           employmentStatus: profile.employment_status,
@@ -84,7 +190,6 @@ export const listWorkforce = createServerFn({ method: "GET" })
         }),
       };
     });
-
   });
 
 export const getWorkforceMember = createServerFn({ method: "GET" })
@@ -94,21 +199,136 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    const [{ data: profile, error }, { data: roles }, { data: documents }] = await Promise.all([
+    const actor = await loadActor(context.supabase, context.userId);
+    if (
+      data.id !== context.userId &&
+      !actor.permissions.includes("workforce:read:all") &&
+      !actor.permissions.includes("workforce:read:team")
+    ) {
+      throw new Error("This person is not visible to you.");
+    }
+
+    if (data.id !== context.userId && !actor.permissions.includes("workforce:read:all")) {
+      const scope = await resolveSupervisorScope(context.supabase, context.userId, actor.roles);
+      if (!scope.scopedUserIds.has(data.id)) {
+        throw new Error("This person is outside your assigned department or team scope.");
+      }
+    }
+
+    const [
+      { data: rawProfile, error },
+      { data: roles },
+      { data: departments },
+      deptMgrRes,
+      { data: directReports },
+      { data: allocations },
+    ] = await Promise.all([
       context.supabase.from("profiles").select(PROFILE_SELECT).eq("id", data.id).maybeSingle(),
       context.supabase.from("user_roles").select("role").eq("user_id", data.id),
+      context.supabase.from("departments").select("id, name, code"),
+      selectDepartmentManagersSafe(context.supabase),
       context.supabase
-        .from("documents")
-        .select("id, doc_type, file_name, file_path, status, review_note, reviewed_at, created_at")
+        .from("profiles")
+        .select("id")
+        .eq("reporting_lead_id", data.id)
+        .eq("employment_status", "active"),
+      context.supabase
+        .from("project_allocations")
+        .select(
+          "id, project_id, role_in_project, start_date, end_date, hours_per_day, allocation_pct, daily_task_target, status, acknowledged_at, projects(id, code, name, work_mode, task_unit, status)",
+        )
         .eq("user_id", data.id)
+        .neq("status", "ended")
         .order("created_at", { ascending: false }),
     ]);
     if (error) throw error;
-    if (!profile) throw new Error("This person is not visible to you.");
+    if (!rawProfile) throw new Error("This person is not visible to you.");
+
+    const canSeeSensitivePii = canViewEmployeeSensitivePii(
+      context.userId,
+      data.id,
+      actor.roles,
+    );
+    const isFounderOnly =
+      actor.roles.includes("founder") && !actor.roles.some((r) => r !== "founder");
+
+    // Redact sensitive PII fields on the server when caller is not Self, HR, or Super Admin
+    const profile = {
+      ...rawProfile,
+      personal_email: canSeeSensitivePii ? rawProfile.personal_email : null,
+      date_of_birth: canSeeSensitivePii ? rawProfile.date_of_birth : null,
+      current_address: canSeeSensitivePii ? rawProfile.current_address : null,
+      permanent_address: canSeeSensitivePii ? rawProfile.permanent_address : null,
+      emergency_contact_name: isFounderOnly ? null : rawProfile.emergency_contact_name,
+      emergency_contact_phone: isFounderOnly ? null : rawProfile.emergency_contact_phone,
+    };
+
+    const canSeeDocuments = canAccessEmployeeDocuments(
+      context.userId,
+      data.id,
+      actor.roles,
+      actor.permissions,
+    );
+
+    let documents: {
+      id: string;
+      doc_type: string;
+      file_name: string;
+      file_path: string;
+      status: string;
+      review_note: string | null;
+      reviewed_at: string | null;
+      created_at: string;
+    }[] = [];
+
+    if (canSeeDocuments) {
+      const { data: docRows } = await context.supabase
+        .from("documents")
+        .select("id, doc_type, file_name, file_path, status, review_note, reviewed_at, created_at")
+        .eq("user_id", data.id)
+        .order("created_at", { ascending: false });
+      documents = docRows ?? [];
+    }
+
+    const deptMap = new Map((departments ?? []).map((d) => [d.id, d]));
+    const department = profile.department_id ? (deptMap.get(profile.department_id) ?? null) : null;
+    const managedDepartments = deptMgrRes.rows
+      .filter((dm) => dm.manager_id === data.id)
+      .map((dm) => deptMap.get(dm.department_id))
+      .filter((d): d is NonNullable<typeof d> => Boolean(d));
+
+    let reportingLead: { id: string; fullName: string; designation: string | null } | null = null;
+    if (profile.reporting_lead_id) {
+      const names = await loadProfileNames(context.supabase, [profile.reporting_lead_id]);
+      const resolved = names.get(profile.reporting_lead_id);
+      if (resolved) {
+        reportingLead = {
+          id: profile.reporting_lead_id,
+          fullName: resolved.fullName,
+          designation: resolved.designation ?? null,
+        };
+      }
+    }
+
+    const targetRoles = (roles ?? []).map((r) => r.role);
+
     return {
       profile,
-      roles: (roles ?? []).map((r) => r.role),
-      documents: documents ?? [],
+      roles: targetRoles,
+      documents,
+      canSeeSensitivePii,
+      canSeeDocuments,
+      department,
+      reportingLead,
+      managedDepartments,
+      directReportsCount: (directReports ?? []).length,
+      allocations: allocations ?? [],
+      isExecutiveGovernance: isExecutiveGovernanceOnly(targetRoles),
+      missingReportingLead: needsReportingLead({
+        roles: targetRoles,
+        employmentStatus: profile.employment_status,
+        reportingLeadId: profile.reporting_lead_id,
+      }),
     };
   });
 
@@ -130,6 +350,7 @@ export const updateMyProfile = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
+    await requirePermission(context.supabase, context.userId, "workforce:update:self");
     const patch: Record<string, unknown> = {};
     if (data.fullName !== undefined) patch["full_name"] = data.fullName.trim();
     if (data.personalEmail !== undefined) patch["personal_email"] = data.personalEmail || null;
@@ -171,6 +392,7 @@ export const submitProfileForVerification = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "workforce:update:self");
 
     const [{ data: profile }, { data: documents }] = await Promise.all([
       supabase
@@ -274,6 +496,9 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
       employeeCode?: string | null;
       category?: string;
       employmentStatus?: string;
+      availableHoursPerDay?: number | null;
+      internshipStart?: string | null;
+      internshipEnd?: string | null;
     }) => {
       if (!input?.userId) throw new Error("A person id is required.");
       if (input.reportingLeadId && input.reportingLeadId === input.userId) {
@@ -299,6 +524,12 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
     if (data.employeeCode !== undefined) patch["employee_code"] = data.employeeCode || null;
     if (data.category !== undefined) patch["category"] = data.category;
     if (data.employmentStatus !== undefined) patch["employment_status"] = data.employmentStatus;
+    if (data.availableHoursPerDay !== undefined)
+      patch["available_hours_per_day"] = data.availableHoursPerDay;
+    if (data.internshipStart !== undefined)
+      patch["internship_start"] = data.internshipStart || null;
+    if (data.internshipEnd !== undefined)
+      patch["internship_end"] = data.internshipEnd || null;
 
     const { error } = await supabase
       .from("profiles")
@@ -317,6 +548,109 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+export const upsertDepartment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    (input: { id?: string | null; name: string; code: string; description?: string | null }) => {
+      if (!input?.name?.trim()) throw new Error("Department name is required.");
+      if (!input?.code?.trim()) throw new Error("Department code is required.");
+      return {
+        id: input.id?.trim() || null,
+        name: input.name.trim(),
+        code: input.code.trim().toUpperCase(),
+        description: input.description?.trim() || null,
+      };
+    },
+  )
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "org:manage:all");
+
+    const payload = {
+      name: data.name,
+      code: data.code,
+      description: data.description,
+    };
+
+    const { data: row, error } = data.id
+      ? await supabase
+          .from("departments")
+          .update(payload)
+          .eq("id", data.id)
+          .select("*")
+          .single()
+      : await supabase.from("departments").insert(payload).select("*").single();
+    if (error) {
+      if (error.code === "23505") throw new Error("Department name or code already exists.");
+      throw error;
+    }
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: data.id ? "department.updated" : "department.created",
+      entityType: "department",
+      entityId: row.id,
+      detail: payload,
+    });
+    return { department: row };
+  });
+
+export const setDepartmentManagers = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { departmentId: string; managerIds: string[] }) => {
+    if (!input?.departmentId) throw new Error("A department id is required.");
+    return {
+      departmentId: input.departmentId,
+      managerIds: [...new Set((input.managerIds ?? []).filter(Boolean))],
+    };
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const [canOrg, canWorkforce] = await Promise.all([
+      hasPermission(supabase, userId, "org:manage:all"),
+      hasPermission(supabase, userId, "workforce:update:all"),
+    ]);
+    if (!canOrg && !canWorkforce) {
+      await requirePermission(supabase, userId, "org:manage:all");
+    }
+
+    const { error: deleteError } = await supabase
+      .from("department_managers")
+      .delete()
+      .eq("department_id", data.departmentId);
+    if (deleteError) {
+      if (isMissingSchemaResourceError(deleteError)) {
+        throw new Error(
+          "Department Manager assignments require applying SQL migration 20261111150000_p0_security_scoping_and_compliance.sql to the database.",
+        );
+      }
+      throw deleteError;
+    }
+
+    if (data.managerIds.length > 0) {
+      const { error: insertError } = await supabase.from("department_managers").insert(
+        data.managerIds.map((managerId) => ({
+          department_id: data.departmentId,
+          manager_id: managerId,
+          assigned_by: userId,
+        })),
+      );
+      if (insertError) throw insertError;
+    }
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "department.managers_updated",
+      entityType: "department",
+      entityId: data.departmentId,
+      detail: { managerIds: data.managerIds },
+    });
+
+    return { ok: true, managerIds: data.managerIds };
+  });
+
 export const getProfileDocuments = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { userId: string }) => {
@@ -324,12 +658,20 @@ export const getProfileDocuments = createServerFn({ method: "GET" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    await requireSelfOrPermission(
-      context.supabase,
-      context.userId,
-      data.userId,
-      "documents:read:all",
-    );
+    if (context.userId !== data.userId) {
+      const actor = await loadActor(context.supabase, context.userId);
+      const allowed = canAccessEmployeeDocuments(
+        context.userId,
+        data.userId,
+        actor.roles,
+        actor.permissions,
+      );
+      if (!allowed) {
+        throw new Error(
+          "Forbidden: sensitive employee documents can only be viewed by the employee, HR, or Super Admin.",
+        );
+      }
+    }
     const { data: documents, error } = await context.supabase
       .from("documents")
       .select("id, doc_type, file_name, file_path, status, review_note, reviewed_at, created_at")
@@ -360,11 +702,17 @@ export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
       throw new Error("Could not find employee profile or email.");
     }
 
+    const baseSiteUrl = (
+      process.env["SITE_URL"] ||
+      process.env["VITE_SITE_URL"] ||
+      "https://hrm.theaischool.co"
+    ).replace(/\/+$/, "");
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
       profile.work_email,
       {
-        redirectTo: `${process.env['SITE_URL'] || process.env['VITE_SITE_URL'] || "https://hrm.theaischool.co"}/auth`,
+        redirectTo: `${baseSiteUrl}/auth/reset-password`,
       },
     );
 
@@ -387,7 +735,7 @@ export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
 /** Option B: Set temporary password directly (Super Admin ONLY). Never logged. */
 export const setEmployeeTemporaryPassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { userId: string; temporaryPassword?: string }) => {
+  .inputValidator((input: { userId: string; temporaryPassword?: string | undefined }) => {
     if (!input?.userId) throw new Error("User ID is required.");
     return input;
   })
@@ -450,8 +798,12 @@ export const setEmployeeTemporaryPassword = createServerFn({ method: "POST" })
 export const changeMustChangePassword = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { newPassword: string }) => {
-    if (!input?.newPassword || input.newPassword.length < 6) {
-      throw new Error("New password must be at least 6 characters.");
+    const pwd = input?.newPassword ?? "";
+    if (pwd.length < 8) {
+      throw new Error("New password must be at least 8 characters.");
+    }
+    if (!/[A-Za-z]/.test(pwd) || !/[0-9!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pwd)) {
+      throw new Error("New password must include at least one letter and one number or symbol.");
     }
     return input;
   })
@@ -476,6 +828,45 @@ export const changeMustChangePassword = createServerFn({ method: "POST" })
       entityType: "user",
       entityId: userId,
       detail: { reason: "must_change_password_cleared" },
+    });
+
+    return { ok: true };
+  });
+
+/** Voluntary self-service password change from the Unified Profile Security Settings card. */
+export const changeMyPassword = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input: { newPassword: string }) => {
+    const pwd = input?.newPassword ?? "";
+    if (pwd.length < 8) {
+      throw new Error("New password must be at least 8 characters.");
+    }
+    if (!/[A-Za-z]/.test(pwd) || !/[0-9!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pwd)) {
+      throw new Error("New password must include at least one letter and one number or symbol.");
+    }
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+      password: data.newPassword,
+    });
+    if (error) throw new Error(error.message);
+
+    await supabaseAdmin
+      .from("profiles")
+      .update({ must_change_password: false } as never)
+      .eq("id", userId);
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "password.changed_by_user",
+      entityType: "user",
+      entityId: userId,
+      detail: { reason: "self_service_profile_security" },
     });
 
     return { ok: true };

@@ -1,6 +1,10 @@
-import { renderWelcomeEmailHtml, type WelcomeEmailParams } from "./welcome-email";
+import { renderWelcomeEmailHtml } from "./welcome-email";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { CATEGORY_LABELS, ROLE_LABELS, type AppRole, type UserCategory } from "@/lib/permissions";
+import {
+  createResendEmailTransport,
+  inspectEmailProviderConfig,
+} from "@/lib/recruitment/email-transport.server";
 
 export async function sendWelcomeEmailForProvisionedUser(params: {
   userId: string;
@@ -23,10 +27,16 @@ export async function sendWelcomeEmailForProvisionedUser(params: {
       return { sent: false, reason: "already-sent" };
     }
 
+    // 2. Verify real email-provider configuration before attempting to send
+    const providerStatus = inspectEmailProviderConfig();
+    if (!providerStatus.configured) {
+      return { sent: false, reason: "email-provider-not-configured" };
+    }
+
     const portalUrl =
       params.portalUrl ||
-      process.env['SITE_URL'] ||
-      process.env['VITE_SITE_URL'] ||
+      process.env["SITE_URL"] ||
+      process.env["VITE_SITE_URL"] ||
       "https://hrm.theaischool.co";
 
     const html = renderWelcomeEmailHtml({
@@ -38,11 +48,20 @@ export async function sendWelcomeEmailForProvisionedUser(params: {
       portalUrl,
     });
 
-    console.log(
-      `[welcome-email] Generated welcome email for ${params.workEmail} (${params.employeeCode})`,
-    );
+    const transport = createResendEmailTransport();
+    const dispatchResult = await transport.send({
+      to: params.workEmail,
+      subject: `Welcome to The AI School — Employee ID ${params.employeeCode}`,
+      html,
+      idempotencyKey: `employee-welcome:${params.userId}:${params.employeeCode}`,
+    });
 
-    // Update profile timestamp to ensure idempotency
+    if (!dispatchResult.ok) {
+      console.error("[welcome-email] Provider rejected welcome email:", dispatchResult.errorMessage);
+      return { sent: false, reason: dispatchResult.errorMessage };
+    }
+
+    // Only mark welcome_email_sent_at after real provider acceptance ("sent")
     await supabaseAdmin
       .from("profiles")
       .update({ welcome_email_sent_at: new Date().toISOString() })

@@ -6,11 +6,16 @@ import {
   type BlockerSeverityValue,
 } from "@/lib/enums";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { nearestOffice, requiresLocation } from "@/lib/geo";
+import {
+  evaluateWfhAuthorization,
+  evaluateWfoGeofence,
+  requiresLocation,
+} from "@/lib/geo";
 import { requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
 import { loadActiveOffices } from "./locations.server";
 import { computeTargetAchievement, validateEodSubmission } from "./daily.server";
+import { evalCanReviewOrEscalateSafe } from "./schema-compat.server";
 import {
   ENTRY_SELECT,
   loadDay,
@@ -29,6 +34,42 @@ export type CheckInInput = {
   /** Device reading, captured by the browser for on-site work modes. */
   location?: { latitude: number; longitude: number; accuracy?: number | null } | null;
 };
+
+function aggregateAllocationTargets(
+  allocations: Awaited<ReturnType<typeof loadWorkableAllocations>>,
+) {
+  const primary = allocations[0];
+  const primaryProject = primary?.projects as
+    | {
+        hourly_task_target?: number | null;
+        daily_task_target?: number | null;
+        quality_target_pct?: number | null;
+        max_rejection_rate_pct?: number | null;
+      }
+    | null;
+
+  let dailySum = 0;
+  let hasDaily = false;
+  for (const alloc of allocations) {
+    const proj = alloc.projects as { daily_task_target?: number | null } | null;
+    const t = alloc.daily_task_target ?? proj?.daily_task_target ?? null;
+    if (t != null && Number(t) > 0) {
+      dailySum += Number(t);
+      hasDaily = true;
+    }
+  }
+
+  return {
+    hourlyTarget: primaryProject?.hourly_task_target ?? null,
+    dailyTarget: hasDaily
+      ? dailySum
+      : (primary?.daily_task_target ?? primaryProject?.daily_task_target ?? null),
+    qualityTargetPct:
+      primary?.quality_target_pct ?? primaryProject?.quality_target_pct ?? null,
+    maxRejectionRatePct:
+      primary?.max_rejection_rate_pct ?? primaryProject?.max_rejection_rate_pct ?? null,
+  };
+}
 
 /** Everything the "My Day" screen needs, all derived server-side. */
 export const getMyDay = createServerFn({ method: "POST" })
@@ -75,16 +116,6 @@ export const getMyDay = createServerFn({ method: "POST" })
     const metrics = await loadMetrics(supabase, day.id);
     const status = await loadStatus(supabase, day.id);
 
-    const primary = allocations[0];
-    const project = primary?.projects as
-      | {
-          hourly_task_target?: number | null;
-          daily_task_target?: number | null;
-          quality_target_pct?: number | null;
-          max_rejection_rate_pct?: number | null;
-        }
-      | null;
-
     const approved = (entries ?? []).reduce((sum, e) => sum + Number(e.units_approved ?? 0), 0);
     const rejected = (entries ?? []).reduce((sum, e) => sum + Number(e.units_rejected ?? 0), 0);
 
@@ -93,13 +124,7 @@ export const getMyDay = createServerFn({ method: "POST" })
       unitsCompleted: metrics.unitsCompleted,
       unitsApproved: approved || null,
       unitsRejected: rejected || null,
-      targets: {
-        hourlyTarget: project?.hourly_task_target ?? null,
-        dailyTarget: primary?.daily_task_target ?? project?.daily_task_target ?? null,
-        qualityTargetPct: primary?.quality_target_pct ?? project?.quality_target_pct ?? null,
-        maxRejectionRatePct:
-          primary?.max_rejection_rate_pct ?? project?.max_rejection_rate_pct ?? null,
-      },
+      targets: aggregateAllocationTargets(allocations),
     });
 
     return {
@@ -169,7 +194,7 @@ export const checkIn = createServerFn({ method: "POST" })
       allocations.reduce((sum, a) => sum + Number(a.hours_per_day ?? 0), 0) * 60,
     );
 
-    // Location gate — on-site work modes only. Everything else is unrestricted.
+    // Location & WFH authorization gates
     let location = {
       location_status: "not_required" as string,
       location_latitude: null as number | null,
@@ -181,39 +206,25 @@ export const checkIn = createServerFn({ method: "POST" })
 
     if (requiresLocation(data.workMode)) {
       const offices = await loadActiveOffices(supabase);
-      if (offices.length === 0) {
-        location.location_status = "not_provided";
-      } else {
-        const reading = data.location;
-        if (
-          !reading ||
-          !Number.isFinite(Number(reading.latitude)) ||
-          !Number.isFinite(Number(reading.longitude))
-        ) {
-          throw new Error(
-            "Location access is required to check in as Work from office. Allow location access, or pick a different work mode if you are not on-site.",
-          );
-        }
-        const coords = {
-          latitude: Number(reading.latitude),
-          longitude: Number(reading.longitude),
-          accuracy: reading.accuracy == null ? null : Number(reading.accuracy),
-        };
-        const match = nearestOffice(coords, offices);
-        if (!match || !match.withinRadius) {
-          throw new Error(
-            `You appear to be outside the office (about ${Math.round(match?.distance ?? 0)} m from ${match?.office.name ?? "the office"}, allowed ${match?.office.radius_meters ?? 0} m). Please select a different work mode if you're not on-site, or contact your admin if this is incorrect.`,
-          );
-        }
-        location = {
-          location_status: "verified",
-          location_latitude: coords.latitude,
-          location_longitude: coords.longitude,
-          location_accuracy_m: coords.accuracy,
-          location_distance_m: Math.round(match.distance * 10) / 10,
-          office_location_id: match.office.id,
-        };
-      }
+      location = evaluateWfoGeofence(data.location, offices);
+    } else if (data.workMode === "wfh") {
+      const { data: wfhRequests } = await supabase
+        .from("requests")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("request_type", "wfh")
+        .eq("status", "approved")
+        .lte("start_date", workDate)
+        .gte("end_date", workDate)
+        .limit(1);
+
+      const projectWorkModes = allocations.map(
+        (a) => (a.projects as { work_mode?: string | null } | null)?.work_mode ?? null,
+      );
+      evaluateWfhAuthorization({
+        projectWorkModes,
+        hasApprovedWfhToday: (wfhRequests ?? []).length > 0,
+      });
     }
 
     const payload = {
@@ -557,7 +568,28 @@ export const resolveBlocker = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    const { data: row, error } = await context.supabase
+    const { supabase, userId } = context;
+    const { data: existing, error: findErr } = await supabase
+      .from("blockers")
+      .select("id, user_id, notified_lead_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) throw new Error("Blocker not found or not visible to you.");
+
+    if (existing.user_id === userId) {
+      await requirePermission(supabase, userId, "blockers:raise:self");
+    } else {
+      await requirePermission(supabase, userId, "blockers:manage:team");
+      if (existing.notified_lead_id !== userId) {
+        const canReview = await evalCanReviewOrEscalateSafe(supabase, existing.user_id, userId);
+        if (!canReview) {
+          throw new Error("Forbidden: you can only resolve blockers for your assigned team or escalations.");
+        }
+      }
+    }
+
+    const { data: row, error } = await supabase
       .from("blockers")
       .update({
         status: "resolved",
@@ -568,7 +600,53 @@ export const resolveBlocker = createServerFn({ method: "POST" })
       .select("*")
       .single();
     if (error) throw error;
+
+    if (row.user_id !== userId) {
+      await notify(supabase, {
+        userId: row.user_id,
+        actorId: userId,
+        type: "blocker.resolved",
+        title: "Your blocker was marked resolved",
+        body: data.note?.trim() || row.description,
+        entityType: "blocker",
+        entityId: row.id,
+      });
+    }
+
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "blocker.resolved",
+      entityType: "blocker",
+      entityId: row.id,
+      detail: { note: data.note?.trim() || null, owner_id: row.user_id },
+    });
+
     return { blocker: row };
+  });
+
+export const listTeamBlockers = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "blockers:manage:team");
+    const { data: rows, error } = await supabase
+      .from("blockers")
+      .select("*, projects(code, name), attendance_days(work_date)")
+      .neq("user_id", userId)
+      .order("started_at", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+
+    const { loadProfileNames, nameOf } = await import("./profile-names.server");
+    const names = await loadProfileNames(
+      supabase,
+      (rows ?? []).flatMap((b) => [b.user_id, b.notified_lead_id]),
+    );
+    return (rows ?? []).map((b) => ({
+      ...b,
+      authorName: nameOf(names, b.user_id),
+      leadName: b.notified_lead_id ? nameOf(names, b.notified_lead_id) : null,
+    }));
   });
 
 export type EodInput = {
@@ -609,14 +687,6 @@ export const saveEodReport = createServerFn({ method: "POST" })
 
     const allocations = await loadWorkableAllocations(supabase, userId);
     const primary = allocations[0];
-    const project = primary?.projects as
-      | {
-          hourly_task_target?: number | null;
-          daily_task_target?: number | null;
-          quality_target_pct?: number | null;
-          max_rejection_rate_pct?: number | null;
-        }
-      | null;
 
     const achievement = computeTargetAchievement({
       taskMinutes: metrics.taskMinutes,
@@ -625,13 +695,7 @@ export const saveEodReport = createServerFn({ method: "POST" })
         (entries ?? []).reduce((s, e) => s + Number(e.units_approved ?? 0), 0) || null,
       unitsRejected:
         (entries ?? []).reduce((s, e) => s + Number(e.units_rejected ?? 0), 0) || null,
-      targets: {
-        hourlyTarget: project?.hourly_task_target ?? null,
-        dailyTarget: primary?.daily_task_target ?? project?.daily_task_target ?? null,
-        qualityTargetPct: primary?.quality_target_pct ?? project?.quality_target_pct ?? null,
-        maxRejectionRatePct:
-          primary?.max_rejection_rate_pct ?? project?.max_rejection_rate_pct ?? null,
-      },
+      targets: aggregateAllocationTargets(allocations),
     });
 
     const problems = data.submit
@@ -762,6 +826,22 @@ export const reviewTaskEntry = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "tasks:review:team");
+
+    const { data: target, error: findErr } = await supabase
+      .from("task_entries")
+      .select("id, user_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!target) throw new Error("Task entry not found or not visible to you.");
+    if (target.user_id === userId) {
+      throw new Error("Forbidden: you cannot review your own task entry.");
+    }
+    const canReview = await evalCanReviewOrEscalateSafe(supabase, target.user_id, userId);
+    if (!canReview) {
+      throw new Error("Forbidden: you can only review task entries for your assigned scope or escalations.");
+    }
+
     const { data: row, error } = await supabase
       .from("task_entries")
       .update({

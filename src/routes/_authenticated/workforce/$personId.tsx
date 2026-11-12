@@ -1,31 +1,19 @@
-import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { ArrowLeft, Copy } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Copy, KeyRound, Mail, ShieldAlert } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import {
-  getWorkforceMember,
-  reviewProfile,
-  sendEmployeePasswordResetEmail,
-  setEmployeeTemporaryPassword,
-} from "@/lib/workforce.functions";
-import { getDocumentDownloadUrl, reviewDocument } from "@/lib/documents.functions";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DirectoryDocumentsSection,
+  DirectorySecuritySection,
+  EmploymentDetailsSection,
+  PersonalInfoSection,
+  ProfileIdentityHeader,
+  ReportingStructureSection,
+  WorkAssignmentsSection,
+  type EmploymentFormValues,
+} from "@/components/profile/unified-profile-sections";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,39 +24,78 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import {
-  ACCOUNT_STATUS_LABELS,
-  CATEGORY_LABELS,
-  DOCUMENT_TYPE_LABELS,
-  ROLE_LABELS,
-  type AccountStatus,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { actorQueryOptions, useActor } from "@/hooks/use-actor";
+import { getDocumentDownloadUrl, reviewDocument } from "@/lib/documents.functions";
+import {
+  assignableRolesFor,
+  canModifyUserRoles,
   type AppRole,
-  type DocumentType,
+  type EmploymentStatus,
   type UserCategory,
 } from "@/lib/permissions";
+import { setUserRoles } from "@/lib/rbac.functions";
+import {
+  getOrgReference,
+  getWorkforceMember,
+  reviewProfile,
+  sendEmployeePasswordResetEmail,
+  setEmployeeTemporaryPassword,
+  updateEmploymentDetails,
+} from "@/lib/workforce.functions";
 
 export const Route = createFileRoute("/_authenticated/workforce/$personId")({
   head: () => ({
     meta: [
-      { title: "Employee record | The AI School HRM" },
+      { title: "Employee Profile | The AI School HRM" },
       {
         name: "description",
-        content: "Employee profile, documents and HR verification actions.",
+        content: "Unified employee profile, reporting hierarchy, assignments, KYC, and security.",
       },
-      { property: "og:title", content: "Employee record | The AI School HRM" },
-      { property: "og:description", content: "Profile details and document verification." },
+      { property: "og:title", content: "Employee Profile | The AI School HRM" },
+      { property: "og:description", content: "Unified employee profile and governance." },
     ],
   }),
   loader: ({ context }) => context.queryClient.ensureQueryData(actorQueryOptions),
   component: PersonPage,
 });
 
+type WorkforceMemberResult = Awaited<ReturnType<typeof getWorkforceMember>>;
+
 function PersonPage() {
   const { personId } = useParams({ from: "/_authenticated/workforce/$personId" });
+  const { data } = useSuspenseQuery({
+    queryKey: ["workforce-member", personId],
+    queryFn: () => getWorkforceMember({ data: { id: personId } }),
+  });
+
+  // Keying by personId guarantees fresh form, role, and dialog state when navigating
+  // between employee profiles (e.g. clicking a Reporting Lead link).
+  return <PersonProfileContent key={personId} personId={personId} data={data} />;
+}
+
+function PersonProfileContent({
+  personId,
+  data,
+}: {
+  personId: string;
+  data: WorkforceMemberResult;
+}) {
   const actor = useActor();
   const queryClient = useQueryClient();
-  const [note, setNote] = useState("");
+  const [verificationNote, setVerificationNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [openingDocId, setOpeningDocId] = useState<string | null>(null);
 
   // Password reset dialog state
   const [showResetEmailDialog, setShowResetEmailDialog] = useState(false);
@@ -76,15 +103,59 @@ function PersonPage() {
   const [customTempPass, setCustomTempPass] = useState("");
   const [generatedTempPass, setGeneratedTempPass] = useState<string | null>(null);
 
-  const { data } = useSuspenseQuery({
-    queryKey: ["workforce-member", personId],
-    queryFn: () => getWorkforceMember({ data: { id: personId } }),
-  });
-
-  const canVerify = actor.can("documents:verify:all");
-  const canResetPassword = actor.can("workforce:update:all");
-  const isSuperAdmin = actor.roles.includes("super_admin");
   const profile = data.profile;
+  const canVerify =
+    actor.can("documents:verify:all") &&
+    (actor.roles.includes("hr") || actor.roles.includes("super_admin"));
+  const canUpdateWorkforce = actor.can("workforce:update:all");
+  const canAssignRbac = actor.can("rbac:assign:all");
+  const canResetPassword = canUpdateWorkforce;
+  const isSuperAdmin = actor.roles.includes("super_admin");
+  const isFounderViewer =
+    actor.roles.includes("founder") && !actor.roles.some((r) => r !== "founder");
+  const showKycStatusBadgeOnly =
+    !data.canSeeDocuments &&
+    (actor.roles.includes("admin") || actor.roles.includes("founder"));
+
+  const orgRefQuery = useQuery({
+    queryKey: ["org-reference"],
+    queryFn: () => getOrgReference(),
+    enabled: canUpdateWorkforce,
+  });
+  const orgRef = orgRefQuery.data;
+
+  const [employmentForm, setEmploymentForm] = useState<EmploymentFormValues>(() => ({
+    designation: profile.designation ?? "",
+    category: (profile.category as UserCategory) ?? "full_time",
+    departmentId: profile.department_id ?? "",
+    reportingLeadId: profile.reporting_lead_id ?? "",
+    employmentStatus: (profile.employment_status as EmploymentStatus) ?? "active",
+    joiningDate: profile.joining_date ?? "",
+    workLocation: profile.work_location ?? "",
+    availableHoursPerDay: profile.available_hours_per_day?.toString() ?? "8",
+    internshipStart: profile.internship_start ?? "",
+    internshipEnd: profile.internship_end ?? "",
+  }));
+
+  const [selectedRoles, setSelectedRoles] = useState<AppRole[]>(
+    () => (data.roles as AppRole[]) ?? ["employee"],
+  );
+
+  const allowedRolesToAssign = assignableRolesFor(actor.roles);
+  const canEditTargetRoles =
+    canAssignRbac &&
+    actor.userId !== personId &&
+    canModifyUserRoles(actor.roles, data.roles);
+
+  function handleEmploymentFormChange(patch: Partial<EmploymentFormValues>) {
+    setEmploymentForm((prev) => ({ ...prev, ...patch }));
+  }
+
+  function handleToggleRole(role: AppRole, checked: boolean) {
+    setSelectedRoles((prev) =>
+      checked ? [...new Set([...prev, role])] : prev.filter((r) => r !== role),
+    );
+  }
 
   async function handleSendResetEmail() {
     setBusy(true);
@@ -109,7 +180,7 @@ function PersonPage() {
       setGeneratedTempPass(res.temporaryPassword);
       setCustomTempPass("");
       toast.success("Temporary password set successfully.");
-      await queryClient.invalidateQueries();
+      await queryClient.invalidateQueries({ queryKey: ["workforce-member", personId] });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to set temporary password.");
     } finally {
@@ -117,14 +188,16 @@ function PersonPage() {
     }
   }
 
-  async function decide(approve: boolean) {
+  async function decideProfile(approve: boolean) {
     setBusy(true);
     try {
       await reviewProfile({
-        data: note ? { userId: personId, approve, note } : { userId: personId, approve },
+        data: verificationNote
+          ? { userId: personId, approve, note: verificationNote }
+          : { userId: personId, approve },
       });
       toast.success(approve ? "Profile verified." : "Sent back for changes.");
-      setNote("");
+      setVerificationNote("");
       await queryClient.invalidateQueries();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save that decision.");
@@ -134,217 +207,214 @@ function PersonPage() {
   }
 
   async function openDocument(documentId: string) {
+    setOpeningDocId(documentId);
     try {
       const { url } = await getDocumentDownloadUrl({ data: { documentId } });
-      window.open(url, "_blank", "noopener");
+      window.open(url, "_blank", "noopener,noreferrer");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not open that document.");
+    } finally {
+      setOpeningDocId(null);
     }
   }
 
-  async function decideDocument(documentId: string, approve: boolean) {
+  async function decideDocument(documentId: string, approve: boolean, rejectReason?: string) {
+    setBusy(true);
     try {
-      await reviewDocument({ data: { documentId, approve } });
+      const cleanNote = rejectReason?.trim();
+      await reviewDocument({
+        data: cleanNote ? { documentId, approve, note: cleanNote } : { documentId, approve },
+      });
+      toast.success(approve ? "Document approved." : "Document rejected.");
       await queryClient.invalidateQueries();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not review that document.");
+    } finally {
+      setBusy(false);
     }
   }
+
+  async function saveEmployment(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await updateEmploymentDetails({
+        data: {
+          userId: personId,
+          designation: employmentForm.designation.trim() || null,
+          category: employmentForm.category,
+          departmentId: employmentForm.departmentId || null,
+          reportingLeadId: employmentForm.reportingLeadId || null,
+          employmentStatus: employmentForm.employmentStatus,
+          joiningDate: employmentForm.joiningDate || null,
+          workLocation: employmentForm.workLocation.trim() || null,
+          availableHoursPerDay: employmentForm.availableHoursPerDay
+            ? Number(employmentForm.availableHoursPerDay)
+            : null,
+          internshipStart:
+            employmentForm.category === "intern"
+              ? employmentForm.internshipStart || null
+              : null,
+          internshipEnd:
+            employmentForm.category === "intern" ? employmentForm.internshipEnd || null : null,
+        },
+      });
+      toast.success("Employment details updated.");
+      await queryClient.invalidateQueries({ queryKey: ["workforce-member", personId] });
+      await queryClient.invalidateQueries({ queryKey: ["workforce"] });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update employment details.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRoles() {
+    if (selectedRoles.length === 0) {
+      toast.error("At least one role is required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await setUserRoles({
+        data: {
+          userId: personId,
+          roles: selectedRoles,
+        },
+      });
+      toast.success("Authorization roles updated and recorded in audit trail.");
+      await queryClient.invalidateQueries({ queryKey: ["workforce-member", personId] });
+      await queryClient.invalidateQueries({ queryKey: ["workforce"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update roles.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasRightColumn =
+    data.canSeeDocuments || showKycStatusBadgeOnly || canResetPassword;
 
   return (
     <AppShell
       title={profile.full_name}
       description={profile.work_email}
       actions={
-        <Badge variant="outline">
-          {ACCOUNT_STATUS_LABELS[profile.account_status as AccountStatus]}
-        </Badge>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/workforce">
+            <ArrowLeft className="mr-1.5 size-3.5" aria-hidden="true" />
+            Directory
+          </Link>
+        </Button>
       }
     >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Profile</CardTitle>
-            <CardDescription>
-              {data.roles.map((r) => ROLE_LABELS[r as AppRole] ?? r).join(", ") || "No role"} ·{" "}
-              {CATEGORY_LABELS[profile.category as UserCategory] ?? "—"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
-            <Detail
-              label="Employee ID"
-              value={profile.employee_code ?? "Pending Assignment"}
-              className="font-mono"
-            />
-            <Detail label="Designation" value={profile.designation} />
-            <Detail label="Personal email" value={profile.personal_email} />
-            <Detail label="Mobile" value={profile.mobile} />
-            <Detail label="Date of birth" value={profile.date_of_birth} />
-            <Detail label="Institution" value={profile.institution} />
-            <Detail
-              label="Experience"
-              value={profile.experience_years ? `${profile.experience_years} yrs` : null}
-            />
-            <Detail
-              label="Available hours / day"
-              value={profile.available_hours_per_day?.toString() ?? null}
-            />
-            <Detail label="Emergency contact" value={profile.emergency_contact_name} />
-            <Detail label="Emergency phone" value={profile.emergency_contact_phone} />
-            <Detail
-              label="Skills"
-              value={(profile.skills ?? []).join(", ") || null}
-              className="sm:col-span-2"
-            />
-            <Detail
-              label="Current address"
-              value={profile.current_address}
-              className="sm:col-span-2"
-            />
-          </CardContent>
-        </Card>
+      <div className="space-y-6">
+        <ProfileIdentityHeader
+          fullName={profile.full_name}
+          workEmail={profile.work_email}
+          employeeCode={profile.employee_code}
+          photoUrl={profile.photo_url}
+          designation={profile.designation}
+          departmentName={data.department?.name ?? null}
+          category={profile.category}
+          accountStatus={profile.account_status}
+          employmentStatus={profile.employment_status}
+          roles={data.roles}
+          isExecutiveGovernance={data.isExecutiveGovernance}
+        />
 
-        <div className="space-y-6">
-          {/* Password & Security Card */}
-          {canResetPassword ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <KeyRound className="size-4 text-primary" /> Password &amp; Security
-                </CardTitle>
-                <CardDescription>Manage password recovery and access credentials.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {/* Option A: HR / Admin / Super Admin */}
-                <div className="rounded-md border p-3">
-                  <p className="text-sm font-medium">Option A · Reset link email</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Sends a secure reset link to {profile.work_email}. Employee sets their own
-                    password.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-3 w-full"
-                    disabled={busy}
-                    onClick={() => setShowResetEmailDialog(true)}
-                  >
-                    <Mail className="mr-1.5 size-3.5" /> Send reset email
-                  </Button>
-                </div>
+        <div
+          className={
+            hasRightColumn
+              ? "grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]"
+              : "space-y-6"
+          }
+        >
+          <div className="space-y-6">
+            <PersonalInfoSection
+              mode="directory"
+              profile={profile}
+              canSeeSensitivePii={data.canSeeSensitivePii}
+              isFounderViewer={isFounderViewer}
+            />
 
-                {/* Option B: Super Admin Only */}
-                {isSuperAdmin ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/40 dark:bg-amber-950/20">
-                    <p className="flex items-center gap-1.5 text-sm font-medium text-amber-900 dark:text-amber-200">
-                      <ShieldAlert className="size-4 text-amber-600 dark:text-amber-400" /> Option B · Set temporary password
-                    </p>
-                    <p className="mt-0.5 text-xs text-amber-800/80 dark:text-amber-300/70">
-                      Super Admin override. Employee will be forced to change it on next login.
-                    </p>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="mt-3 w-full"
-                      disabled={busy}
-                      onClick={() => {
-                        setGeneratedTempPass(null);
-                        setShowTempPassDialog(true);
-                      }}
-                    >
-                      <KeyRound className="mr-1.5 size-3.5" /> Set temporary password
-                    </Button>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          ) : null}
+            <EmploymentDetailsSection
+              profile={profile}
+              departmentName={data.department?.name ?? null}
+              roles={data.roles}
+              canUpdateWorkforce={canUpdateWorkforce}
+              canEditTargetRoles={canEditTargetRoles}
+              allowedRolesToAssign={allowedRolesToAssign}
+              busy={busy}
+              orgRefLoading={orgRefQuery.isLoading}
+              departments={orgRef?.departments ?? []}
+              people={orgRef?.people ?? []}
+              personId={personId}
+              employmentForm={employmentForm}
+              onEmploymentFormChange={handleEmploymentFormChange}
+              onSaveEmployment={saveEmployment}
+              selectedRoles={selectedRoles}
+              onToggleRole={handleToggleRole}
+              onSaveRoles={saveRoles}
+            />
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Documents</CardTitle>
-              <CardDescription>{data.documents.length} uploaded</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {data.documents.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nothing uploaded yet.</p>
-              ) : null}
-              {data.documents.map((doc) => (
-                <div
-                  key={doc.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                      {DOCUMENT_TYPE_LABELS[doc.doc_type as DocumentType] ?? doc.doc_type}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">{doc.status}</p>
-                  </div>
-                  <div className="flex shrink-0 gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => openDocument(doc.id)}>
-                      Open
-                    </Button>
-                    {canVerify ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => decideDocument(doc.id, true)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => decideDocument(doc.id, false)}
-                        >
-                          Reject
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+            <ReportingStructureSection
+              department={data.department}
+              reportingLead={data.reportingLead}
+              managedDepartments={data.managedDepartments}
+              directReportsCount={data.directReportsCount}
+              missingReportingLead={data.missingReportingLead}
+              canLinkProfiles
+            />
 
-          {canVerify ? (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Verification decision</CardTitle>
-                <CardDescription>
-                  Approving activates the account for project allocation.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Textarea
-                  rows={3}
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Optional note shown to the employee"
-                />
-                <div className="flex gap-2">
-                  <Button disabled={busy} onClick={() => decide(true)}>
-                    Verify &amp; activate
-                  </Button>
-                  <Button variant="outline" disabled={busy} onClick={() => decide(false)}>
-                    Send back
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <WorkAssignmentsSection
+              allocations={data.allocations as never}
+              isExecutiveGovernance={data.isExecutiveGovernance}
+            />
+          </div>
+
+          {hasRightColumn ? (
+            <div className="space-y-6">
+              <DirectoryDocumentsSection
+                canSeeDocuments={data.canSeeDocuments}
+                showKycStatusBadgeOnly={showKycStatusBadgeOnly}
+                accountStatus={profile.account_status}
+                documents={data.documents}
+                canVerify={canVerify}
+                busy={busy}
+                openingDocId={openingDocId}
+                onOpenDocument={openDocument}
+                onDecideDocument={decideDocument}
+                verificationNote={verificationNote}
+                onVerificationNoteChange={setVerificationNote}
+                onDecideProfile={decideProfile}
+              />
+
+              <DirectorySecuritySection
+                workEmail={profile.work_email}
+                canResetPassword={canResetPassword}
+                isSuperAdmin={isSuperAdmin}
+                busy={busy}
+                onOpenResetEmailDialog={() => setShowResetEmailDialog(true)}
+                onOpenTempPasswordDialog={() => {
+                  setGeneratedTempPass(null);
+                  setShowTempPassDialog(true);
+                }}
+              />
+            </div>
           ) : null}
         </div>
       </div>
 
-      {/* Confirmation Dialog: Send Password Reset Email */}
       <AlertDialog open={showResetEmailDialog} onOpenChange={setShowResetEmailDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Send password reset link?</AlertDialogTitle>
             <AlertDialogDescription>
-              A password reset link will be sent to <strong>{profile.work_email}</strong> via
-              Supabase Auth. The employee will click the link to choose their own new password.
+              A password reset link will be sent to <strong>{profile.work_email}</strong>. The
+              employee will use it to choose their own new password.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -356,7 +426,6 @@ function PersonPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Dialog: Set Temporary Password (Super Admin) */}
       <Dialog open={showTempPassDialog} onOpenChange={setShowTempPassDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -379,17 +448,18 @@ function PersonPage() {
                   <Button
                     size="sm"
                     variant="ghost"
+                    aria-label="Copy temporary password"
                     onClick={() => {
-                      navigator.clipboard.writeText(generatedTempPass);
+                      void navigator.clipboard.writeText(generatedTempPass);
                       toast.success("Copied temporary password to clipboard.");
                     }}
                   >
-                    <Copy className="size-4" />
+                    <Copy className="size-4" aria-hidden="true" />
                   </Button>
                 </div>
                 <p className="mt-3 text-xs text-muted-foreground">
-                  Share this password with the employee. They will be forced to change it on their
-                  next login. For security, this value is never stored or logged.
+                  Share this password with the employee offline. They must change it on their next
+                  login. This value is never stored or logged.
                 </p>
               </div>
               <DialogFooter>
@@ -406,13 +476,9 @@ function PersonPage() {
                   id="custom-temp"
                   value={customTempPass}
                   onChange={(e) => setCustomTempPass(e.target.value)}
-                  placeholder="Leave empty to auto-generate secure code"
+                  placeholder="Leave empty to auto-generate a secure password"
                 />
-                <p className="text-[11px] text-muted-foreground">
-                  If left empty, a secure code like <code>TAS-Temp-XXXX</code> will be generated.
-                </p>
               </div>
-
               <DialogFooter className="gap-2">
                 <Button
                   type="button"
@@ -434,19 +500,3 @@ function PersonPage() {
   );
 }
 
-function Detail({
-  label,
-  value,
-  className,
-}: {
-  label: string;
-  value?: string | null;
-  className?: string;
-}) {
-  return (
-    <div className={className}>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium">{value || "—"}</p>
-    </div>
-  );
-}

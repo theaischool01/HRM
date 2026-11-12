@@ -67,12 +67,14 @@ export const triggerAutomation = createServerFn({ method: "POST" })
     return result;
   });
 
+import { daysAgoIso } from "./timezone";
+
 /** Flags visible to the caller (RLS already scopes self / team / all). */
 export const listMyFlags = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input: { from?: string } | undefined) => input ?? {})
   .handler(async ({ data, context }) => {
-    const from = data.from ?? new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    const from = data.from ?? daysAgoIso(30);
     const { data: rows, error } = await context.supabase
       .from("automation_flags")
       .select("id, rule, user_id, work_date, severity, message, created_at")

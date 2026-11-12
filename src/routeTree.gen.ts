@@ -14,7 +14,9 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as AuthenticatedAutomationRouteImport } from './routes/_authenticated/automation'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedEmailCenterRouteImport } from './routes/_authenticated/email-center'
 import { Route as AuthenticatedImportRouteImport } from './routes/_authenticated/import'
+import { Route as AuthenticatedInterviewsRouteImport } from './routes/_authenticated/interviews'
 import { Route as AuthenticatedInvitationsRouteImport } from './routes/_authenticated/invitations'
 import { Route as AuthenticatedMyDayRouteImport } from './routes/_authenticated/my-day'
 import { Route as AuthenticatedMyProjectsRouteImport } from './routes/_authenticated/my-projects'
@@ -26,6 +28,10 @@ import { Route as AuthenticatedRequestsRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedReviewsRouteImport } from './routes/_authenticated/reviews'
 import { Route as AuthenticatedRosterImportRouteImport } from './routes/_authenticated/roster-import'
 import { Route as AuthenticatedTeamRouteImport } from './routes/_authenticated/team'
+import { Route as AuthCallbackRouteImport } from './routes/auth_.callback'
+import { Route as AuthResetPasswordRouteImport } from './routes/auth_.reset-password'
+import { Route as AuthenticatedCandidatesIndexRouteImport } from './routes/_authenticated/candidates/index'
+import { Route as AuthenticatedCandidatesCandidateIdRouteImport } from './routes/_authenticated/candidates/$candidateId'
 import { Route as AuthenticatedProjectsIndexRouteImport } from './routes/_authenticated/projects/index'
 import { Route as AuthenticatedProjectsProjectIdRouteImport } from './routes/_authenticated/projects/$projectId'
 import { Route as AuthenticatedWorkforceIndexRouteImport } from './routes/_authenticated/workforce/index'
@@ -57,9 +63,20 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedEmailCenterRoute =
+  AuthenticatedEmailCenterRouteImport.update({
+    id: '/email-center',
+    path: '/email-center',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedImportRoute = AuthenticatedImportRouteImport.update({
   id: '/import',
   path: '/import',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedInterviewsRoute = AuthenticatedInterviewsRouteImport.update({
+  id: '/interviews',
+  path: '/interviews',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedInvitationsRoute =
@@ -120,6 +137,28 @@ const AuthenticatedTeamRoute = AuthenticatedTeamRouteImport.update({
   path: '/team',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth_/callback',
+  path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/auth_/reset-password',
+  path: '/auth/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedCandidatesIndexRoute =
+  AuthenticatedCandidatesIndexRouteImport.update({
+    id: '/candidates/',
+    path: '/candidates/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedCandidatesCandidateIdRoute =
+  AuthenticatedCandidatesCandidateIdRouteImport.update({
+    id: '/candidates/$candidateId',
+    path: '/candidates/$candidateId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedProjectsIndexRoute =
   AuthenticatedProjectsIndexRouteImport.update({
     id: '/projects/',
@@ -162,7 +201,9 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/automation': typeof AuthenticatedAutomationRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/email-center': typeof AuthenticatedEmailCenterRoute
   '/import': typeof AuthenticatedImportRoute
+  '/interviews': typeof AuthenticatedInterviewsRoute
   '/invitations': typeof AuthenticatedInvitationsRoute
   '/my-day': typeof AuthenticatedMyDayRoute
   '/my-projects': typeof AuthenticatedMyProjectsRoute
@@ -174,8 +215,12 @@ export interface FileRoutesByFullPath {
   '/reviews': typeof AuthenticatedReviewsRoute
   '/roster-import': typeof AuthenticatedRosterImportRoute
   '/team': typeof AuthenticatedTeamRoute
+  '/auth/callback': typeof AuthCallbackRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
+  '/candidates/$candidateId': typeof AuthenticatedCandidatesCandidateIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/workforce/$personId': typeof AuthenticatedWorkforcePersonIdRoute
+  '/candidates/': typeof AuthenticatedCandidatesIndexRoute
   '/projects/': typeof AuthenticatedProjectsIndexRoute
   '/workforce/': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
@@ -186,7 +231,9 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/automation': typeof AuthenticatedAutomationRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
+  '/email-center': typeof AuthenticatedEmailCenterRoute
   '/import': typeof AuthenticatedImportRoute
+  '/interviews': typeof AuthenticatedInterviewsRoute
   '/invitations': typeof AuthenticatedInvitationsRoute
   '/my-day': typeof AuthenticatedMyDayRoute
   '/my-projects': typeof AuthenticatedMyProjectsRoute
@@ -198,8 +245,12 @@ export interface FileRoutesByTo {
   '/reviews': typeof AuthenticatedReviewsRoute
   '/roster-import': typeof AuthenticatedRosterImportRoute
   '/team': typeof AuthenticatedTeamRoute
+  '/auth/callback': typeof AuthCallbackRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
+  '/candidates/$candidateId': typeof AuthenticatedCandidatesCandidateIdRoute
   '/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/workforce/$personId': typeof AuthenticatedWorkforcePersonIdRoute
+  '/candidates': typeof AuthenticatedCandidatesIndexRoute
   '/projects': typeof AuthenticatedProjectsIndexRoute
   '/workforce': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
@@ -212,7 +263,9 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/_authenticated/automation': typeof AuthenticatedAutomationRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
+  '/_authenticated/email-center': typeof AuthenticatedEmailCenterRoute
   '/_authenticated/import': typeof AuthenticatedImportRoute
+  '/_authenticated/interviews': typeof AuthenticatedInterviewsRoute
   '/_authenticated/invitations': typeof AuthenticatedInvitationsRoute
   '/_authenticated/my-day': typeof AuthenticatedMyDayRoute
   '/_authenticated/my-projects': typeof AuthenticatedMyProjectsRoute
@@ -224,8 +277,12 @@ export interface FileRoutesById {
   '/_authenticated/reviews': typeof AuthenticatedReviewsRoute
   '/_authenticated/roster-import': typeof AuthenticatedRosterImportRoute
   '/_authenticated/team': typeof AuthenticatedTeamRoute
+  '/auth_/callback': typeof AuthCallbackRoute
+  '/auth_/reset-password': typeof AuthResetPasswordRoute
+  '/_authenticated/candidates/$candidateId': typeof AuthenticatedCandidatesCandidateIdRoute
   '/_authenticated/projects/$projectId': typeof AuthenticatedProjectsProjectIdRoute
   '/_authenticated/workforce/$personId': typeof AuthenticatedWorkforcePersonIdRoute
+  '/_authenticated/candidates/': typeof AuthenticatedCandidatesIndexRoute
   '/_authenticated/projects/': typeof AuthenticatedProjectsIndexRoute
   '/_authenticated/workforce/': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
@@ -238,7 +295,9 @@ export interface FileRouteTypes {
     | '/auth'
     | '/automation'
     | '/dashboard'
+    | '/email-center'
     | '/import'
+    | '/interviews'
     | '/invitations'
     | '/my-day'
     | '/my-projects'
@@ -250,8 +309,12 @@ export interface FileRouteTypes {
     | '/reviews'
     | '/roster-import'
     | '/team'
+    | '/auth/callback'
+    | '/auth/reset-password'
+    | '/candidates/$candidateId'
     | '/projects/$projectId'
     | '/workforce/$personId'
+    | '/candidates/'
     | '/projects/'
     | '/workforce/'
     | '/api/public/hooks/dispatch-invitations'
@@ -262,7 +325,9 @@ export interface FileRouteTypes {
     | '/auth'
     | '/automation'
     | '/dashboard'
+    | '/email-center'
     | '/import'
+    | '/interviews'
     | '/invitations'
     | '/my-day'
     | '/my-projects'
@@ -274,8 +339,12 @@ export interface FileRouteTypes {
     | '/reviews'
     | '/roster-import'
     | '/team'
+    | '/auth/callback'
+    | '/auth/reset-password'
+    | '/candidates/$candidateId'
     | '/projects/$projectId'
     | '/workforce/$personId'
+    | '/candidates'
     | '/projects'
     | '/workforce'
     | '/api/public/hooks/dispatch-invitations'
@@ -287,7 +356,9 @@ export interface FileRouteTypes {
     | '/auth'
     | '/_authenticated/automation'
     | '/_authenticated/dashboard'
+    | '/_authenticated/email-center'
     | '/_authenticated/import'
+    | '/_authenticated/interviews'
     | '/_authenticated/invitations'
     | '/_authenticated/my-day'
     | '/_authenticated/my-projects'
@@ -299,8 +370,12 @@ export interface FileRouteTypes {
     | '/_authenticated/reviews'
     | '/_authenticated/roster-import'
     | '/_authenticated/team'
+    | '/auth_/callback'
+    | '/auth_/reset-password'
+    | '/_authenticated/candidates/$candidateId'
     | '/_authenticated/projects/$projectId'
     | '/_authenticated/workforce/$personId'
+    | '/_authenticated/candidates/'
     | '/_authenticated/projects/'
     | '/_authenticated/workforce/'
     | '/api/public/hooks/dispatch-invitations'
@@ -311,6 +386,8 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
+  AuthCallbackRoute: typeof AuthCallbackRoute
+  AuthResetPasswordRoute: typeof AuthResetPasswordRoute
   ApiPublicHooksDispatchInvitationsRoute: typeof ApiPublicHooksDispatchInvitationsRoute
   ApiPublicHooksRunAutomationRoute: typeof ApiPublicHooksRunAutomationRoute
 }
@@ -352,11 +429,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/email-center': {
+      id: '/_authenticated/email-center'
+      path: '/email-center'
+      fullPath: '/email-center'
+      preLoaderRoute: typeof AuthenticatedEmailCenterRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/import': {
       id: '/_authenticated/import'
       path: '/import'
       fullPath: '/import'
       preLoaderRoute: typeof AuthenticatedImportRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/interviews': {
+      id: '/_authenticated/interviews'
+      path: '/interviews'
+      fullPath: '/interviews'
+      preLoaderRoute: typeof AuthenticatedInterviewsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/invitations': {
@@ -436,6 +527,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedTeamRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/auth_/callback': {
+      id: '/auth_/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth_/reset-password': {
+      id: '/auth_/reset-password'
+      path: '/auth/reset-password'
+      fullPath: '/auth/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/candidates/': {
+      id: '/_authenticated/candidates/'
+      path: '/candidates'
+      fullPath: '/candidates/'
+      preLoaderRoute: typeof AuthenticatedCandidatesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/candidates/$candidateId': {
+      id: '/_authenticated/candidates/$candidateId'
+      path: '/candidates/$candidateId'
+      fullPath: '/candidates/$candidateId'
+      preLoaderRoute: typeof AuthenticatedCandidatesCandidateIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/projects/': {
       id: '/_authenticated/projects/'
       path: '/projects'
@@ -484,7 +603,9 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAutomationRoute: typeof AuthenticatedAutomationRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
+  AuthenticatedEmailCenterRoute: typeof AuthenticatedEmailCenterRoute
   AuthenticatedImportRoute: typeof AuthenticatedImportRoute
+  AuthenticatedInterviewsRoute: typeof AuthenticatedInterviewsRoute
   AuthenticatedInvitationsRoute: typeof AuthenticatedInvitationsRoute
   AuthenticatedMyDayRoute: typeof AuthenticatedMyDayRoute
   AuthenticatedMyProjectsRoute: typeof AuthenticatedMyProjectsRoute
@@ -496,8 +617,10 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedReviewsRoute: typeof AuthenticatedReviewsRoute
   AuthenticatedRosterImportRoute: typeof AuthenticatedRosterImportRoute
   AuthenticatedTeamRoute: typeof AuthenticatedTeamRoute
+  AuthenticatedCandidatesCandidateIdRoute: typeof AuthenticatedCandidatesCandidateIdRoute
   AuthenticatedProjectsProjectIdRoute: typeof AuthenticatedProjectsProjectIdRoute
   AuthenticatedWorkforcePersonIdRoute: typeof AuthenticatedWorkforcePersonIdRoute
+  AuthenticatedCandidatesIndexRoute: typeof AuthenticatedCandidatesIndexRoute
   AuthenticatedProjectsIndexRoute: typeof AuthenticatedProjectsIndexRoute
   AuthenticatedWorkforceIndexRoute: typeof AuthenticatedWorkforceIndexRoute
 }
@@ -505,7 +628,9 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAutomationRoute: AuthenticatedAutomationRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
+  AuthenticatedEmailCenterRoute: AuthenticatedEmailCenterRoute,
   AuthenticatedImportRoute: AuthenticatedImportRoute,
+  AuthenticatedInterviewsRoute: AuthenticatedInterviewsRoute,
   AuthenticatedInvitationsRoute: AuthenticatedInvitationsRoute,
   AuthenticatedMyDayRoute: AuthenticatedMyDayRoute,
   AuthenticatedMyProjectsRoute: AuthenticatedMyProjectsRoute,
@@ -517,8 +642,11 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedReviewsRoute: AuthenticatedReviewsRoute,
   AuthenticatedRosterImportRoute: AuthenticatedRosterImportRoute,
   AuthenticatedTeamRoute: AuthenticatedTeamRoute,
+  AuthenticatedCandidatesCandidateIdRoute:
+    AuthenticatedCandidatesCandidateIdRoute,
   AuthenticatedProjectsProjectIdRoute: AuthenticatedProjectsProjectIdRoute,
   AuthenticatedWorkforcePersonIdRoute: AuthenticatedWorkforcePersonIdRoute,
+  AuthenticatedCandidatesIndexRoute: AuthenticatedCandidatesIndexRoute,
   AuthenticatedProjectsIndexRoute: AuthenticatedProjectsIndexRoute,
   AuthenticatedWorkforceIndexRoute: AuthenticatedWorkforceIndexRoute,
 }
@@ -530,6 +658,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
+  AuthCallbackRoute: AuthCallbackRoute,
+  AuthResetPasswordRoute: AuthResetPasswordRoute,
   ApiPublicHooksDispatchInvitationsRoute:
     ApiPublicHooksDispatchInvitationsRoute,
   ApiPublicHooksRunAutomationRoute: ApiPublicHooksRunAutomationRoute,

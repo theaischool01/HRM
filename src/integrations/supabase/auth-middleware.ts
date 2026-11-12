@@ -35,12 +35,14 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
     
     const SUPABASE_URL =
       process.env['SUPABASE_URL'] ||
-      process.env['VITE_SUPABASE_URL'] ||
-      'https://gkkmmhjhsmrnhnlpgnrs.supabase.co';
+      process.env['VITE_SUPABASE_URL'];
     const SUPABASE_PUBLISHABLE_KEY =
       process.env['SUPABASE_PUBLISHABLE_KEY'] ||
-      process.env['VITE_SUPABASE_PUBLISHABLE_KEY'] ||
-      'sb_publishable_NpDie1q8vS-fmGTqS7fPQQ_f1nNftfS';
+      process.env['VITE_SUPABASE_PUBLISHABLE_KEY'];
+
+    if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+      throw new Error('Server configuration error: Missing SUPABASE_URL or SUPABASE_PUBLISHABLE_KEY');
+    }
     
     const request = getRequest();
 

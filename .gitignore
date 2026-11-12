@@ -42,3 +42,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local tooling / telemetry
+.supabase/
+supabase/.temp/
+
+# Employee PII exports (names, emails, rosters) - keep out of git
+docs/account-audit/
+docs/onboarding/

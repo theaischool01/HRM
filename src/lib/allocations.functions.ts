@@ -1,7 +1,23 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { requirePermission } from "./actor.server";
+import { hasPermission, requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
+import { evalCanManageProjectSafe } from "./schema-compat.server";
+import { todayIso } from "./timezone";
+
+async function requireAllocationManage(
+  supabase: Parameters<typeof requirePermission>[0],
+  userId: string,
+  projectId: string,
+) {
+  if (await hasPermission(supabase, userId, "allocations:manage:all")) return;
+
+  await requirePermission(supabase, userId, "allocations:manage:team");
+  const canScoped = await evalCanManageProjectSafe(supabase, projectId, userId);
+  if (!canScoped) {
+    throw new Error("Forbidden: you can only manage allocations on projects within your assigned scope.");
+  }
+}
 
 const ALLOCATION_SELECT =
   "id, project_id, user_id, reporting_lead_id, role_in_project, start_date, end_date, hours_per_day, allocation_pct, daily_task_target, quality_target_pct, max_rejection_rate_pct, status, acknowledged_at, acknowledged_by, acknowledgment_note, over_allocation_override, created_at";
@@ -68,7 +84,7 @@ export const createAllocation = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    await requirePermission(context.supabase, context.userId, "allocations:manage:all");
+    await requireAllocationManage(context.supabase, context.userId, data.projectId);
 
     const pct = data.allocationPct ?? 100;
     const { data: used, error: loadError } = await context.supabase.rpc("allocation_pct_used", {
@@ -100,7 +116,7 @@ export const createAllocation = createServerFn({ method: "POST" })
         user_id: data.userId,
         reporting_lead_id: data.reportingLeadId || null,
         role_in_project: data.roleInProject?.trim() || null,
-        start_date: data.startDate || new Date().toISOString().slice(0, 10),
+        start_date: data.startDate || todayIso(),
         end_date: data.endDate || null,
         hours_per_day: data.hoursPerDay ?? 8,
         allocation_pct: pct,
@@ -142,10 +158,18 @@ export const endAllocation = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    await requirePermission(context.supabase, context.userId, "allocations:manage:all");
+    const { data: existing, error: findErr } = await context.supabase
+      .from("project_allocations")
+      .select("id, project_id")
+      .eq("id", data.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) throw new Error("Allocation not found.");
+
+    await requireAllocationManage(context.supabase, context.userId, existing.project_id);
     const { error } = await context.supabase
       .from("project_allocations")
-      .update({ status: "ended", end_date: new Date().toISOString().slice(0, 10) })
+      .update({ status: "ended", end_date: todayIso() })
       .eq("id", data.id);
     if (error) throw error;
     await writeAudit(context.supabase, {
@@ -185,6 +209,7 @@ export const acknowledgeAllocation = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
+    await requirePermission(context.supabase, context.userId, "allocations:acknowledge:self");
     const { data: existing, error: readError } = await context.supabase
       .from("project_allocations")
       .select("id, user_id, status, acknowledged_at")

@@ -32,11 +32,17 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 function createSupabaseAdminClient() {
   const SUPABASE_URL =
     process.env['SUPABASE_URL'] ||
-    process.env['VITE_SUPABASE_URL'] ||
-    'https://gkkmmhjhsmrnhnlpgnrs.supabase.co';
+    process.env['VITE_SUPABASE_URL'];
   const SUPABASE_SERVICE_ROLE_KEY =
-    process.env['SUPABASE_SERVICE_ROLE_KEY'] ||
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdra21taGpoc21ybmhubHBnbnJzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzIwNzQ3NiwiZXhwIjoyMTAyNzgzNDc2fQ.VbIZ33-lW4wtovcYMg5rwA4mBnQzVR65p2wVOKODXMk';
+    process.env['SUPABASE_SECRET_KEY'] ||
+    process.env['SUPABASE_SERVICE_ROLE_KEY'];
+
+  if (!SUPABASE_URL) {
+    throw new Error('Missing SUPABASE_URL or VITE_SUPABASE_URL environment variable.');
+  }
+  if (!SUPABASE_SERVICE_ROLE_KEY) {
+    throw new Error('Missing SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY environment variable.');
+  }
 
   return createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     global: {

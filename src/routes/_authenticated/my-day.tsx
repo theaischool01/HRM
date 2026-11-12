@@ -4,6 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import {
   AlarmClock,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Coffee,
@@ -47,6 +48,16 @@ import {
   startBreak,
   submitTaskEntry,
 } from "@/lib/daily.functions";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -90,7 +101,43 @@ const BLOCKER_SEVERITIES = optionsOf(BLOCKER_SEVERITY_LABELS);
 const SLOT_TYPES = optionsOf(TASK_SLOT_TYPE_LABELS);
 
 const timeOf = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  iso
+    ? new Date(iso).toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "—";
+
+const formatWorkDateIst = (workDateIso: string) =>
+  new Date(`${workDateIso}T00:00:00+05:30`).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+
+function entryBadgeVariant(
+  status: string,
+): "success" | "info" | "warning" | "destructive" | "neutral" | "secondary" {
+  if (status === "approved") return "success";
+  if (status === "submitted") return "info";
+  if (status === "revision_required") return "warning";
+  if (status === "rejected") return "destructive";
+  if (status === "draft") return "neutral";
+  return "secondary";
+}
+
+function dayStatusBadgeVariant(
+  status: string,
+): "success" | "info" | "warning" | "destructive" | "secondary" {
+  if (status === "present_complete") return "success";
+  if (status === "present_in_progress") return "info";
+  if (status === "absent") return "destructive";
+  if (status === "present_incomplete") return "warning";
+  return "secondary";
+}
 
 const hhmm = (minutes: number) =>
   `${Math.floor(minutes / 60)}h ${String(Math.round(minutes % 60)).padStart(2, "0")}m`;
@@ -134,12 +181,14 @@ function MyDayPage() {
     severity: "medium" as BlockerSeverityValue,
     description: "",
   });
-  const [eodForm, setEodForm] = useState({
-    highlights: "",
-    challenges: "",
-    tomorrowPlan: "",
-    supportNeeded: "",
-  });
+  const [eodForm, setEodForm] = useState(() => ({
+    highlights: day.eod?.highlights ?? "",
+    challenges: day.eod?.challenges ?? "",
+    tomorrowPlan: day.eod?.tomorrow_plan ?? "",
+    supportNeeded: day.eod?.support_needed ?? "",
+  }));
+  const [eodErrors, setEodErrors] = useState<string[]>([]);
+  const [checkoutConfirmOpen, setCheckoutConfirmOpen] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["my-day"] });
 
@@ -147,6 +196,9 @@ function MyDayPage() {
     setBusy(key);
     try {
       await fn();
+      if (key === "eod" || key === "eod-draft") {
+        setEodErrors([]);
+      }
       toast.success(success);
       await refresh();
     } catch (error) {
@@ -158,6 +210,7 @@ function MyDayPage() {
             : "Something went wrong.";
       if (message.startsWith("EOD_INVALID::")) {
         const problems = JSON.parse(message.replace("EOD_INVALID::", "")) as string[];
+        setEodErrors(problems);
         toast.error("EOD report not submitted", { description: problems.join(" ") });
       } else {
         toast.error(message);
@@ -229,16 +282,99 @@ function MyDayPage() {
 
 
 
+  const submittedEntriesCount = day.entries.filter(
+    (e) => e.status === "submitted" || e.status === "approved",
+  ).length;
+  const draftOrRevisionEntriesCount = day.entries.filter(
+    (e) => e.status === "draft" || e.status === "revision_required",
+  ).length;
+  const openBlockersCount = day.blockers.filter((b) => b.status !== "resolved").length;
+  const eodSubmitted = day.eod?.status === "submitted";
+
   return (
     <AppShell
       title="My day"
-      description={`${new Date(day.workDate).toDateString()} — attendance, hourly tasks, breaks, blockers and EOD.`}
+      description={`${formatWorkDateIst(day.workDate)} (IST) — attendance, hourly tasks, breaks, blockers and EOD.`}
       actions={
-        <Badge variant={day.status === "present_complete" ? "default" : "secondary"}>
+        <Badge variant={dayStatusBadgeVariant(day.status)}>
           {ATTENDANCE_STATUS_LABELS[day.status] ?? day.status}
         </Badge>
       }
     >
+      {/* Active Break Alert Banner */}
+      {openBreak && (
+        <div
+          role="status"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
+        >
+          <div className="flex items-center gap-2.5">
+            <Coffee className="size-4 shrink-0 text-warning" />
+            <span>
+              <strong className="text-foreground">
+                Active {openBreak.category.replace("_", " ")} break
+              </strong>{" "}
+              <span className="text-muted-foreground">
+                (started at {timeOf(openBreak.started_at)} IST) — end break to resume active task
+                coverage.
+              </span>
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy === "break"}
+            onClick={() =>
+              run("break", () => endBreak({ data: { id: openBreak.id } }), "Break ended.")
+            }
+          >
+            End break now
+          </Button>
+        </div>
+      )}
+
+      {/* 4-Step Daily Workflow Progress Strip */}
+      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Daily workflow steps">
+        {[
+          {
+            step: "1. Check In",
+            done: checkedIn,
+            detail: checkedIn ? `${timeOf(day.day!.check_in_at)} IST` : "Pending",
+          },
+          {
+            step: "2. Log Hourly Tasks",
+            done: submittedEntriesCount > 0,
+            detail: `${submittedEntriesCount} submitted${draftOrRevisionEntriesCount > 0 ? ` · ${draftOrRevisionEntriesCount} draft/rev` : ""}`,
+          },
+          {
+            step: "3. Submit EOD",
+            done: eodSubmitted,
+            detail: eodSubmitted ? "Submitted" : "Pending narrative",
+          },
+          {
+            step: "4. Check Out",
+            done: checkedOut,
+            detail: checkedOut ? `${timeOf(day.day!.check_out_at)} IST` : "End of shift",
+          },
+        ].map((item) => (
+          <div
+            key={item.step}
+            className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-xs ${
+              item.done
+                ? "border-success/35 bg-success/5 text-foreground"
+                : "border-border bg-card text-muted-foreground"
+            }`}
+          >
+            <CheckCircle2
+              className={`size-4 shrink-0 ${item.done ? "text-success" : "text-muted-foreground/50"}`}
+            />
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-foreground">{item.step}</p>
+              <p className="truncate text-[11px] text-muted-foreground">{item.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-1">
           <CardHeader>
@@ -353,9 +489,7 @@ function MyDayPage() {
                     variant="secondary"
                     className="w-full"
                     disabled={busy === "check-out"}
-                    onClick={() =>
-                      run("check-out", () => checkOut({ data: { device: deviceInfo() } }), "Checked out.")
-                    }
+                    onClick={() => setCheckoutConfirmOpen(true)}
                   >
                     <LogOut className="size-4" /> Check out
                   </Button>
@@ -403,44 +537,79 @@ function MyDayPage() {
 
                 return (
                   <div key={slot.key} className="border-b last:border-b-0">
-                    <div className="grid grid-cols-2 items-center gap-2 px-3 py-2 text-sm sm:grid-cols-[7.5rem_5.5rem_5.5rem_1fr_auto]">
-                      <span className="font-medium">{slot.label}</span>
-                      <Input
-                        aria-label={`Tasks assigned ${slot.label}`}
-                        className="h-8"
-                        type="number"
-                        min={0}
-                        disabled={locked || !checkedIn}
-                        value={draft.assigned}
-                        onChange={(e) => setDraft({ assigned: e.target.value })}
-                      />
-                      <Input
-                        aria-label={`Tasks completed ${slot.label}`}
-                        className="h-8"
-                        type="number"
-                        min={0}
-                        disabled={locked || !checkedIn}
-                        value={draft.completed}
-                        onChange={(e) => setDraft({ completed: e.target.value })}
-                      />
-                      <div className="min-w-0">
-                        {entry ? (
-                          <Badge variant={entry.status === "approved" ? "default" : "secondary"}>
-                            {entry.status.replace("_", " ")}
-                          </Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Not logged</span>
-                        )}
+                    <div className="space-y-2 px-3 py-2.5 text-sm sm:grid sm:grid-cols-[7.5rem_5.5rem_5.5rem_1fr_auto] sm:items-center sm:gap-2 sm:space-y-0 sm:py-2">
+                      <div className="flex items-center justify-between gap-2 sm:contents">
+                        <span className="font-medium text-foreground">{slot.label}</span>
+                        <div className="hidden min-w-0 sm:col-start-4 sm:row-start-1 sm:block">
+                          {entry ? (
+                            <Badge variant={entryBadgeVariant(entry.status)}>
+                              {entry.status.replace("_", " ")}
+                            </Badge>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Not logged</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 sm:col-start-5 sm:row-start-1">
+                          <span className="sm:hidden">
+                            {entry ? (
+                              <Badge variant={entryBadgeVariant(entry.status)}>
+                                {entry.status.replace("_", " ")}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Not logged</span>
+                            )}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            aria-expanded={open}
+                            aria-label={`Details for ${slot.label}`}
+                            onClick={() => setExpandedSlot(open ? null : slot.key)}
+                          >
+                            {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+                          </Button>
+                        </div>
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Details for ${slot.label}`}
-                        onClick={() => setExpandedSlot(open ? null : slot.key)}
-                      >
-                        {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-                      </Button>
+                      <div className="grid grid-cols-2 gap-2 sm:contents">
+                        <div className="space-y-1 sm:col-start-2 sm:row-start-1 sm:space-y-0">
+                          <span className="block text-[11px] text-muted-foreground sm:sr-only">
+                            Assigned
+                          </span>
+                          <Input
+                            aria-label={`Tasks assigned ${slot.label}`}
+                            className="h-8"
+                            type="number"
+                            min={0}
+                            disabled={locked || !checkedIn}
+                            value={draft.assigned}
+                            onChange={(e) => setDraft({ assigned: e.target.value })}
+                          />
+                        </div>
+                        <div className="space-y-1 sm:col-start-3 sm:row-start-1 sm:space-y-0">
+                          <span className="block text-[11px] text-muted-foreground sm:sr-only">
+                            Completed
+                          </span>
+                          <Input
+                            aria-label={`Tasks completed ${slot.label}`}
+                            className="h-8"
+                            type="number"
+                            min={0}
+                            disabled={locked || !checkedIn}
+                            value={draft.completed}
+                            onChange={(e) => setDraft({ completed: e.target.value })}
+                          />
+                        </div>
+                      </div>
                     </div>
+
+                    {!open &&
+                      entry?.review_note &&
+                      (entry.status === "revision_required" || entry.status === "reviewed") && (
+                        <div className="border-t border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-foreground">
+                          <strong className="text-warning">Reviewer note:</strong>{" "}
+                          {entry.review_note}
+                        </div>
+                      )}
 
                     {open && (
                       <div className="grid gap-3 border-t bg-muted/30 px-3 py-3 sm:grid-cols-2">
@@ -519,6 +688,7 @@ function MyDayPage() {
             <div className="rounded-lg border">
               <button
                 type="button"
+                aria-expanded={showFlexible}
                 className="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
                 onClick={() => setShowFlexible((v) => !v)}
               >
@@ -675,18 +845,19 @@ function MyDayPage() {
                       </p>
                       <p className="truncate text-muted-foreground">{entry.task_description}</p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="text-muted-foreground">
                         {entry.units_assigned != null ? `${entry.units_assigned} assigned · ` : ""}
                         {entry.units_completed} {project?.task_unit ?? "units"}
                       </span>
-                      <Badge variant={entry.status === "approved" ? "default" : "secondary"}>
+                      <Badge variant={entryBadgeVariant(entry.status)}>
                         {entry.status.replace("_", " ")}
                       </Badge>
                       {entry.status === "draft" && (
                         <Button
                           size="sm"
                           variant="ghost"
+                          aria-label={`Submit task entry ${timeOf(entry.started_at)}`}
                           onClick={() =>
                             run("submit", () => submitTaskEntry({ data: { id: entry.id } }), "Submitted.")
                           }
@@ -698,6 +869,7 @@ function MyDayPage() {
                         <Button
                           size="sm"
                           variant="ghost"
+                          aria-label={`Delete task entry ${timeOf(entry.started_at)}`}
                           onClick={() =>
                             run("delete", () => deleteTaskEntry({ data: { id: entry.id } }), "Deleted.")
                           }
@@ -816,58 +988,78 @@ function MyDayPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-3">
-              <select
-                aria-label="Blocker project"
-                className="h-9 rounded-md border bg-background px-3 text-sm"
-                value={blockerForm.allocationId}
-                onChange={(e) => setBlockerForm({ ...blockerForm, allocationId: e.target.value })}
-              >
-                <option value="">Primary assignment</option>
-                {allocations.map((a) => {
-                  const p = a.projects as { code?: string } | null;
-                  return (
-                    <option key={a.id} value={a.id}>
-                      {p?.code}
+              <div className="space-y-1">
+                <Label htmlFor="blocker-alloc" className="text-xs">
+                  Assignment
+                </Label>
+                <select
+                  id="blocker-alloc"
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={blockerForm.allocationId}
+                  onChange={(e) => setBlockerForm({ ...blockerForm, allocationId: e.target.value })}
+                >
+                  <option value="">Primary assignment</option>
+                  {allocations.map((a) => {
+                    const p = a.projects as { code?: string } | null;
+                    return (
+                      <option key={a.id} value={a.id}>
+                        {p?.code}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="blocker-category" className="text-xs">
+                  Category
+                </Label>
+                <select
+                  id="blocker-category"
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={blockerForm.category}
+                  onChange={(e) =>
+                    setBlockerForm({ ...blockerForm, category: e.target.value as BlockerCategoryValue })
+                  }
+                >
+                  {BLOCKER_CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
                     </option>
-                  );
-                })}
-              </select>
-              <select
-                aria-label="Blocker category"
-                className="h-9 rounded-md border bg-background px-3 text-sm"
-                value={blockerForm.category}
-                onChange={(e) =>
-                  setBlockerForm({ ...blockerForm, category: e.target.value as BlockerCategoryValue })
-                }
-              >
-                {BLOCKER_CATEGORIES.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                aria-label="Blocker severity"
-                className="h-9 rounded-md border bg-background px-3 text-sm"
-                value={blockerForm.severity}
-                onChange={(e) =>
-                  setBlockerForm({ ...blockerForm, severity: e.target.value as BlockerSeverityValue })
-                }
-              >
-                {BLOCKER_SEVERITIES.map((sv) => (
-                  <option key={sv.value} value={sv.value}>
-                    {sv.label}
-                  </option>
-                ))}
-              </select>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="blocker-severity" className="text-xs">
+                  Severity
+                </Label>
+                <select
+                  id="blocker-severity"
+                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                  value={blockerForm.severity}
+                  onChange={(e) =>
+                    setBlockerForm({ ...blockerForm, severity: e.target.value as BlockerSeverityValue })
+                  }
+                >
+                  {BLOCKER_SEVERITIES.map((sv) => (
+                    <option key={sv.value} value={sv.value}>
+                      {sv.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <Textarea
-              aria-label="Blocker description"
-              rows={2}
-              placeholder="What is blocking you?"
-              value={blockerForm.description}
-              onChange={(e) => setBlockerForm({ ...blockerForm, description: e.target.value })}
-            />
+            <div className="space-y-1">
+              <Label htmlFor="blocker-desc" className="text-xs">
+                Blocker details
+              </Label>
+              <Textarea
+                id="blocker-desc"
+                rows={2}
+                placeholder="What is blocking you?"
+                value={blockerForm.description}
+                onChange={(e) => setBlockerForm({ ...blockerForm, description: e.target.value })}
+              />
+            </div>
             <Button
               disabled={busy === "blocker" || !checkedIn}
               onClick={() =>
@@ -906,7 +1098,7 @@ function MyDayPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Badge variant={b.status === "resolved" ? "default" : "secondary"}>
+                      <Badge variant={b.status === "resolved" ? "success" : "warning"}>
                         {b.status}
                       </Badge>
                       {b.status !== "resolved" && (
@@ -936,9 +1128,61 @@ function MyDayPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {/* Today's Rollup Summary Bar */}
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs sm:grid-cols-5">
+              <div>
+                <p className="text-muted-foreground">Attended</p>
+                <p className="font-mono text-sm font-semibold text-foreground">
+                  {metrics ? hhmm(metrics.workedMinutes) : "0h 00m"}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Task Time</p>
+                <p className="font-mono text-sm font-semibold text-foreground">
+                  {metrics ? hhmm(metrics.taskMinutes) : "0h 00m"}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Submitted Slots</p>
+                <p className="font-mono text-sm font-semibold text-foreground">
+                  {submittedEntriesCount}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Units Completed</p>
+                <p className="font-mono text-sm font-semibold text-foreground">
+                  {achievement?.unitsCompleted ?? 0}
+                </p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Open Blockers</p>
+                <p
+                  className={`font-mono text-sm font-semibold ${
+                    openBlockersCount > 0 ? "text-warning" : "text-foreground"
+                  }`}
+                >
+                  {openBlockersCount}
+                </p>
+              </div>
+            </div>
+
+            {eodErrors.length > 0 && (
+              <div
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+              >
+                <p className="font-semibold">Please resolve before submitting EOD:</p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                  {eodErrors.map((err) => (
+                    <li key={err}>{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {day.eod?.status === "submitted" ? (
-              <p className="rounded-md border bg-muted/40 p-3 text-sm">
-                Submitted at {timeOf(day.eod.submitted_at)}. {day.eod.highlights}
+              <p className="rounded-md border border-success/30 bg-success/10 p-3 text-sm text-foreground">
+                Submitted at {timeOf(day.eod.submitted_at)} IST. {day.eod.highlights}
               </p>
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
@@ -979,7 +1223,7 @@ function MyDayPage() {
                 />
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
                 disabled={busy === "eod-draft"}
@@ -1005,6 +1249,60 @@ function MyDayPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Check-Out Confirmation Dialog */}
+      <AlertDialog open={checkoutConfirmOpen} onOpenChange={setCheckoutConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm End-of-Shift Check Out?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Records your official shift check-out time in IST for{" "}
+                  <strong className="text-foreground">{formatWorkDateIst(day.workDate)}</strong>.
+                </p>
+                {(openBreak || draftOrRevisionEntriesCount > 0 || !eodSubmitted) && (
+                  <ul className="list-disc space-y-1 rounded-md border border-warning/40 bg-warning/10 p-3 pl-7 text-xs text-foreground">
+                    {openBreak && (
+                      <li>
+                        You currently have an <strong>active break</strong> running — consider
+                        ending it before checking out.
+                      </li>
+                    )}
+                    {draftOrRevisionEntriesCount > 0 && (
+                      <li>
+                        You have <strong>{draftOrRevisionEntriesCount}</strong> unsubmitted draft or
+                        revision-required task slot(s).
+                      </li>
+                    )}
+                    {!eodSubmitted && (
+                      <li>
+                        Your <strong>End-of-Day (EOD) report</strong> has not been submitted yet.
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy === "check-out"}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy === "check-out"}
+              onClick={() => {
+                setCheckoutConfirmOpen(false);
+                void run(
+                  "check-out",
+                  () => checkOut({ data: { device: deviceInfo() } }),
+                  "Checked out.",
+                );
+              }}
+            >
+              Confirm Check Out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

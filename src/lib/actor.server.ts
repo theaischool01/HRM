@@ -3,7 +3,12 @@
 // guards are UX only, this is the security boundary.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
-import type { Actor, AppRole, PermissionKey } from "./permissions";
+import {
+  normalizeEffectivePermissions,
+  type Actor,
+  type AppRole,
+  type PermissionKey,
+} from "./permissions";
 import { describeUnknownError } from "./describe-error";
 
 /**
@@ -47,12 +52,12 @@ export async function loadActor(supabase: Client, userId: string): Promise<Actor
   if (roleError) rethrowDbError("Loading your roles failed", roleError);
 
   const roles = (roleRows ?? []).map((r) => r.role as AppRole);
-  let permissions: PermissionKey[] = [];
+  let rawPermissions: string[] = [];
 
   const permissionRows = permissionRpcResult?.data;
   if (permissionRows && Array.isArray(permissionRows) && permissionRows.length > 0) {
-    permissions = (permissionRows as { permission_key: string }[]).map(
-      (p) => p.permission_key as PermissionKey,
+    rawPermissions = (permissionRows as { permission_key: string }[]).map(
+      (p) => p.permission_key,
     );
   } else if (roles.length > 0) {
     // Resilient fallback: Resolve permissions directly from role_permissions table for assigned roles
@@ -62,11 +67,11 @@ export async function loadActor(supabase: Client, userId: string): Promise<Actor
       .in("role", roles);
 
     if (rolePermRows && Array.isArray(rolePermRows)) {
-      permissions = Array.from(
-        new Set(rolePermRows.map((rp) => rp.permission_key as PermissionKey)),
-      );
+      rawPermissions = Array.from(new Set(rolePermRows.map((rp) => rp.permission_key)));
     }
   }
+
+  const permissions = normalizeEffectivePermissions(roles, rawPermissions);
 
   return {
     userId,
@@ -85,12 +90,22 @@ export async function hasPermission(
   userId: string,
   permission: PermissionKey,
 ): Promise<boolean> {
-  const { data, error } = await supabase.rpc("has_permission", {
-    _user_id: userId,
-    _permission: permission,
-  });
-  if (error) throw error;
-  return data === true;
+  const [{ data: roleRows, error: roleError }, { data: rpcResult, error: rpcError }] =
+    await Promise.all([
+      supabase.from("user_roles").select("role").eq("user_id", userId),
+      supabase.rpc("has_permission", {
+        _user_id: userId,
+        _permission: permission,
+      }),
+    ]);
+
+  if (roleError) throw roleError;
+  if (rpcError) throw rpcError;
+
+  const roles = (roleRows ?? []).map((r) => r.role as AppRole);
+  const raw = rpcResult === true ? [permission] : [];
+  const effective = normalizeEffectivePermissions(roles, raw);
+  return effective.includes(permission);
 }
 
 export async function requirePermission(

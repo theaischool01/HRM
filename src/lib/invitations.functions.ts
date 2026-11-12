@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { requirePermission } from "./actor.server";
+import { APP_ROLES, canAssignRole, type AppRole } from "./permissions";
 
 export type InviteDraft = {
   email: string;
@@ -83,6 +84,24 @@ export const enqueueInvitations = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "invitations:create:all");
+
+    const { data: actorRoleRows } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId);
+    const actorRoles = (actorRoleRows ?? []).map((r) => r.role as AppRole);
+
+    for (const invite of data.invites) {
+      if (!APP_ROLES.includes(invite.role as AppRole)) {
+        throw new Error(`Invalid role "${invite.role}" for ${invite.email}.`);
+      }
+      if (!canAssignRole(actorRoles, invite.role as AppRole)) {
+        if (invite.role === "admin") {
+          throw new Error("Forbidden: Only HR or Super Admin can invite someone with the Admin role.");
+        }
+        throw new Error(`Forbidden: Your role cannot invite someone with the '${invite.role}' role.`);
+      }
+    }
 
     const emails = data.invites.map((i) => i.email);
     const { data: existing } = await supabase

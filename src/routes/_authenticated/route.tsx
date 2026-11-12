@@ -16,16 +16,34 @@ export const Route = createFileRoute("/_authenticated")({
   errorComponent: ({ error }) => errorToAccessScreen(error),
 });
 
+function AuthenticatedContent() {
+  const actor = useActor();
+  return (
+    <>
+      <Outlet />
+      <ForcePasswordChangeDialog open={actor.mustChangePassword === true} />
+    </>
+  );
+}
+
 function AuthenticatedLayout() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center">
-          <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex min-h-screen flex-col items-center justify-center gap-2 bg-background"
+        >
+          <div
+            aria-hidden="true"
+            className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent"
+          />
+          <span className="text-xs text-muted-foreground">Loading workspace…</span>
         </div>
       }
     >
-      <Outlet />
+      <AuthenticatedContent />
     </Suspense>
   );
 }

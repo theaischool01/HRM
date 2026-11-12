@@ -16,7 +16,7 @@ export type ApprovalRoutingInput = {
   submitterRoles: AppRole[];
   /** The submitter's reporting lead, if any. */
   reportingLeadId: string | null;
-  /** Fallback approvers holding the admin tier (admin / founder / super admin). */
+  /** Fallback approvers holding the admin escalation tier (admin / super admin). */
   adminApproverIds: string[];
 };
 
@@ -26,10 +26,11 @@ export type ApprovalRoute = {
   reason: string;
 };
 
-const ADMIN_TIER_ROLES: AppRole[] = ["admin", "founder", "super_admin"];
+/** Founder is strictly read-only and never receives operational approval escalations. */
+const ADMIN_TIER_ROLES: AppRole[] = ["admin", "super_admin"];
 
 export function isLeadSubmitter(roles: AppRole[]): boolean {
-  return roles.includes("lead");
+  return roles.includes("lead") || roles.includes("manager");
 }
 
 export function isAdminTier(roles: AppRole[]): boolean {
@@ -43,7 +44,7 @@ export function routeApproval(input: ApprovalRoutingInput): ApprovalRoute {
     return {
       tier: "admin",
       approverIds: adminApproverIds.filter((id) => id !== reportingLeadId),
-      reason: "Admin-tier submitters are reviewed by the Admin/Founder tier.",
+      reason: "Admin-tier submitters are reviewed by another Admin or Super Admin.",
     };
   }
 
@@ -51,7 +52,7 @@ export function routeApproval(input: ApprovalRoutingInput): ApprovalRoute {
     return {
       tier: "admin",
       approverIds: adminApproverIds,
-      reason: "Lead submissions escalate to the Admin/Founder tier, never to another lead.",
+      reason: "Lead/Manager submissions escalate to the Admin tier, never to another lead.",
     };
   }
 
@@ -66,6 +67,6 @@ export function routeApproval(input: ApprovalRoutingInput): ApprovalRoute {
   return {
     tier: "admin",
     approverIds: adminApproverIds,
-    reason: "No reporting lead assigned — falls back to the Admin/Founder tier.",
+    reason: "No reporting lead assigned — falls back to the Admin escalation tier.",
   };
 }

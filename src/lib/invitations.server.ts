@@ -51,12 +51,16 @@ async function provisionInvitedUser(params: {
   reportingLeadId: string | null;
   metadata?: Record<string, unknown> | null;
 }): Promise<void> {
-  // Roster imports carry joining details on the invitation until acceptance.
+  // Roster & candidate conversions carry joining details on the invitation until acceptance.
   const meta = (params.metadata ?? {}) as {
     mobile?: string | null;
     joiningDate?: string | null;
     lastWorkingDay?: string | null;
     employeeCode?: string | null;
+    candidateId?: string | null;
+    location?: string | null;
+    skills?: string[] | null;
+    experienceYears?: number | null;
   };
 
   // Check if profile already exists to preserve existing employee code if already claimed
@@ -104,7 +108,21 @@ async function provisionInvitedUser(params: {
     .from("user_roles")
     .upsert({ user_id: params.userId, role: params.role as never }, { onConflict: "user_id,role" });
 
-  // Dispatch Welcome Email (idempotent, records welcome_email_sent_at)
+  // Link converted recruitment candidate record to the provisioned employee userId (safe if P2 table not yet applied)
+  if (meta.candidateId) {
+    const { error: linkErr } = await supabaseAdmin
+      .from("candidates")
+      .update({ converted_user_id: params.userId })
+      .eq("id", meta.candidateId);
+    if (linkErr) {
+      const { isMissingSchemaResourceError } = await import("./schema-compat.server");
+      if (!isMissingSchemaResourceError(linkErr)) {
+        console.warn("[invitations] Failed to link converted candidate user_id:", linkErr);
+      }
+    }
+  }
+
+  // Dispatch Welcome Email when verified email provider is configured
   if (employeeCode) {
     const { sendWelcomeEmailForProvisionedUser } = await import("./emails/send-welcome.server");
     void sendWelcomeEmailForProvisionedUser({
@@ -150,9 +168,15 @@ export async function dispatchInvitationBatch(options?: {
     for (const row of rows) {
       const attempts = (row.attempts ?? 0) + 1;
       try {
+        const defaultRedirect = `${(
+          process.env["SITE_URL"] ||
+          process.env["VITE_SITE_URL"] ||
+          "https://hrm.theaischool.co"
+        ).replace(/\/+$/, "")}/auth/callback`;
+
         const { data: created, error: inviteError } =
           await supabaseAdmin.auth.admin.inviteUserByEmail(row.email, {
-            ...(options?.redirectTo ? { redirectTo: options.redirectTo } : {}),
+            redirectTo: options?.redirectTo || defaultRedirect,
             data: { full_name: row.full_name, invitation_id: row.id },
           });
 

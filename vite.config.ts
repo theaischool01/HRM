@@ -5,9 +5,9 @@ import path from "node:path";
 export default defineConfig({
   plugins: [],
   nitro: {
-    preset: process.env.VERCEL ? "vercel" : "node-server",
+    preset: process.env["VERCEL"] ? "vercel" : "node-server",
     hooks: {
-      compiled: async (nitro) => {
+      compiled: async (nitro: { options: { output: { serverDir?: string } } }) => {
         const outputDir = nitro.options.output.serverDir || path.resolve(".vercel/output/functions/__server.func");
         if (!fs.existsSync(outputDir)) return;
         
@@ -74,7 +74,7 @@ export default defineConfig({
         
         patchDir(outputDir);
 
-        if (process.env.VERCEL) {
+        if (process.env["VERCEL"]) {
           const vercelDir = path.resolve(".vercel/output");
           if (fs.existsSync(vercelDir)) {
             const configJsonPath = path.join(vercelDir, "config.json");
@@ -116,5 +116,5 @@ export default defineConfig({
         }
       },
     },
-  },
+  } as Record<string, unknown>,
 });

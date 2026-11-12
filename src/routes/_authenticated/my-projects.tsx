@@ -1,14 +1,15 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { CheckCircle2, ClipboardCheck } from "lucide-react";
+import { ArrowRight, CheckCircle2, ClipboardCheck } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { actorQueryOptions } from "@/hooks/use-actor";
+import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { acknowledgeAllocation, listMyAllocations } from "@/lib/allocations.functions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -36,6 +37,8 @@ export const Route = createFileRoute("/_authenticated/my-projects")({
 });
 
 function MyProjectsPage() {
+  const actor = useActor();
+  const canAcknowledge = actor.can("allocations:acknowledge:self");
   const queryClient = useQueryClient();
   const { data: allocations } = useSuspenseQuery({
     queryKey: ["my-allocations"],
@@ -65,6 +68,14 @@ function MyProjectsPage() {
     <AppShell
       title="My assignments"
       description="Acknowledge each assignment before logging work against it."
+      actions={
+        <Button asChild variant="outline" size="sm">
+          <Link to="/my-day">
+            Go to My day
+            <ArrowRight className="ml-1.5 size-4" />
+          </Link>
+        </Button>
+      }
     >
       {allocations.length === 0 ? (
         <Card>
@@ -89,7 +100,7 @@ function MyProjectsPage() {
               <Card key={a.id} data-testid="assignment-card">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <CardTitle className="text-base">{project?.name ?? "Project"}</CardTitle>
                       <CardDescription>
                         {project?.code}
@@ -97,13 +108,9 @@ function MyProjectsPage() {
                       </CardDescription>
                     </div>
                     {acknowledged ? (
-                      <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">
-                        Acknowledged
-                      </Badge>
+                      <Badge variant="success">Acknowledged</Badge>
                     ) : (
-                      <Badge variant="secondary" className="bg-amber-100 text-amber-900">
-                        Action needed
-                      </Badge>
+                      <Badge variant="warning">Action needed</Badge>
                     )}
                   </div>
                 </CardHeader>
@@ -128,32 +135,47 @@ function MyProjectsPage() {
                   </div>
 
                   {acknowledged ? (
-                    <p className="flex items-center gap-2 rounded-md bg-emerald-50 p-3 text-emerald-900">
-                      <CheckCircle2 className="size-4" />
-                      Acknowledged on {new Date(a.acknowledged_at as string).toLocaleString()}
+                    <p className="flex items-center gap-2 rounded-md border border-success/30 bg-success/10 p-3 text-xs text-foreground">
+                      <CheckCircle2 className="size-4 shrink-0 text-success" />
+                      <span>
+                        Acknowledged on{" "}
+                        {new Date(a.acknowledged_at as string).toLocaleString("en-IN", {
+                          timeZone: "Asia/Kolkata",
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}{" "}
+                        IST
+                      </span>
                     </p>
-                  ) : (
-                    <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 p-3">
-                      <p className="text-amber-900">
+                  ) : canAcknowledge ? (
+                    <div className="space-y-2.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+                      <p className="text-xs text-amber-900 dark:text-amber-200">
                         Confirm you have read the targets above. This records a timestamped
                         acknowledgment and unlocks work logging for this project.
                       </p>
-                      <Textarea
-                        rows={2}
-                        placeholder="Optional note back to your lead"
-                        value={notes[a.id] ?? ""}
-                        onChange={(e) => setNotes({ ...notes, [a.id]: e.target.value })}
-                      />
+                      <div className="space-y-1">
+                        <Label htmlFor={`ack-note-${a.id}`} className="text-xs">
+                          Note to lead (optional)
+                        </Label>
+                        <Textarea
+                          id={`ack-note-${a.id}`}
+                          rows={2}
+                          placeholder="Optional note back to your lead"
+                          value={notes[a.id] ?? ""}
+                          onChange={(e) => setNotes({ ...notes, [a.id]: e.target.value })}
+                          className="bg-background"
+                        />
+                      </div>
                       <Button
                         size="sm"
                         data-testid="acknowledge-button"
                         disabled={busy === a.id}
                         onClick={() => acknowledge(a.id)}
                       >
-                        Acknowledge assignment
+                        {busy === a.id ? "Acknowledging..." : "Acknowledge assignment"}
                       </Button>
                     </div>
-                  )}
+                  ) : null}
                 </CardContent>
               </Card>
             );

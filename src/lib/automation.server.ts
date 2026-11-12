@@ -10,6 +10,7 @@
 //     re-run of the same day is a no-op instead of a duplicate notification.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { describeUnknownError } from "./describe-error";
+import { daysAgoIso, istHoursMinutes, todayIso } from "./timezone";
 
 export const LEASE_NAME = "automation:daily";
 export const LEASE_SECONDS = 300;
@@ -49,10 +50,6 @@ type FlagDraft = {
   notifyUser: boolean;
   notifyLead: boolean;
 };
-
-function dateOnly(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 
 function minutesSince(iso: string | null): number {
   if (!iso) return 0;
@@ -135,8 +132,9 @@ export async function runAutomation(trigger: string): Promise<AutomationResult> 
   const runId = run?.id ?? null;
 
   const drafts: FlagDraft[] = [];
-  const today = dateOnly(new Date());
-  const from = dateOnly(new Date(Date.now() - settings.lookback_days * 86_400_000));
+  const now = new Date();
+  const today = todayIso(now);
+  const from = daysAgoIso(settings.lookback_days, now);
 
   try {
     // ---- Calendar: never flag a week-off or holiday. ------------------
@@ -159,11 +157,12 @@ export async function runAutomation(trigger: string): Promise<AutomationResult> 
       .limit(2000);
     const liveDays = days ?? [];
 
-    // ---- Rule 1: no check-in by the cut-off (today only). -------------
+    // ---- Rule 1: no check-in by the cut-off (today only, in IST). ------
     const [cutH, cutM] = settings.no_checkin_cutoff.split(":").map(Number);
+    const istNow = istHoursMinutes(now);
     const cutoffPassed =
-      new Date().getHours() > (cutH ?? 11) ||
-      (new Date().getHours() === (cutH ?? 11) && new Date().getMinutes() >= (cutM ?? 0));
+      istNow.hours > (cutH ?? 11) ||
+      (istNow.hours === (cutH ?? 11) && istNow.minutes >= (cutM ?? 0));
 
     if (cutoffPassed && !nonWorking.has(today)) {
       const { data: expected } = await supabaseAdmin

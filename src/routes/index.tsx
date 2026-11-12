@@ -21,4 +21,13 @@ export const Route = createFileRoute("/")({
   beforeLoad: () => {
     throw redirect({ to: "/dashboard" });
   },
+  pendingComponent: () => (
+    <div
+      role="status"
+      aria-label="Loading portal"
+      className="flex min-h-screen items-center justify-center bg-background"
+    >
+      <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+    </div>
+  ),
 });

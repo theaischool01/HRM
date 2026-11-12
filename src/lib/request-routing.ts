@@ -10,9 +10,14 @@
 
 import { isAdminTier, isLeadSubmitter } from "./approval-routing";
 
-/** HR staff have no lead tier above them, so their own requests go to HR peers. */
+/** HR / executive / admin-tier staff have no lead tier above them. */
 function routesToHrOnly(roles: AppRole[]): boolean {
-  return isLeadSubmitter(roles) || isAdminTier(roles) || roles.includes("hr");
+  return (
+    isLeadSubmitter(roles) ||
+    isAdminTier(roles) ||
+    roles.includes("hr") ||
+    roles.includes("founder")
+  );
 }
 import type { AppRole } from "./permissions";
 

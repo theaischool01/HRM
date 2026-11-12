@@ -31,13 +31,15 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 function createSupabaseClient() {
   const SUPABASE_URL =
     (typeof import.meta !== 'undefined' && import.meta.env?.['VITE_SUPABASE_URL']) ||
-    (typeof process !== 'undefined' && (process.env?.['VITE_SUPABASE_URL'] || process.env?.['SUPABASE_URL'])) ||
-    'https://gkkmmhjhsmrnhnlpgnrs.supabase.co';
+    (typeof process !== 'undefined' && (process.env?.['VITE_SUPABASE_URL'] || process.env?.['SUPABASE_URL']));
 
   const SUPABASE_PUBLISHABLE_KEY =
     (typeof import.meta !== 'undefined' && import.meta.env?.['VITE_SUPABASE_PUBLISHABLE_KEY']) ||
-    (typeof process !== 'undefined' && (process.env?.['VITE_SUPABASE_PUBLISHABLE_KEY'] || process.env?.['SUPABASE_PUBLISHABLE_KEY'])) ||
-    'sb_publishable_NpDie1q8vS-fmGTqS7fPQQ_f1nNftfS';
+    (typeof process !== 'undefined' && (process.env?.['VITE_SUPABASE_PUBLISHABLE_KEY'] || process.env?.['SUPABASE_PUBLISHABLE_KEY']));
+
+  if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+    throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY environment variables.');
+  }
 
   return createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     global: {

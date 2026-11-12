@@ -1,4 +1,13 @@
+import { timingSafeEqual } from "node:crypto";
 import { createFileRoute } from "@tanstack/react-router";
+
+function verifySchedulerSecret(provided: string, expected: string): boolean {
+  if (!expected || !provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 /**
  * Throttled invitation drain, called on a schedule. Authenticated with a
@@ -15,7 +24,7 @@ export const Route = createFileRoute("/api/public/hooks/dispatch-invitations")({
           "";
         const expected = process.env["SCHEDULER_HOOK_SECRET"] ?? "";
 
-        if (!expected || provided.length !== expected.length || provided !== expected) {
+        if (!verifySchedulerSecret(provided, expected)) {
           return new Response(JSON.stringify({ error: "Unauthorized" }), {
             status: 401,
             headers: { "Content-Type": "application/json" },

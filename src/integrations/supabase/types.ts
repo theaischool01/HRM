@@ -471,6 +471,298 @@ export type Database = {
           },
         ]
       }
+      candidate_activities: {
+        Row: {
+           activity_type: string
+          actor_id: string | null
+          body: string | null
+          candidate_id: string
+          created_at: string
+          from_status: string | null
+          id: string
+          metadata: Json
+          to_status: string | null
+        }
+        Insert: {
+          activity_type: string
+          actor_id?: string | null
+          body?: string | null
+          candidate_id: string
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          metadata?: Json
+          to_status?: string | null
+        }
+        Update: {
+          activity_type?: string
+          actor_id?: string | null
+          body?: string | null
+          candidate_id?: string
+          created_at?: string
+          from_status?: string | null
+          id?: string
+          metadata?: Json
+          to_status?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidate_activities_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidate_activities_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      candidate_import_batches: {
+        Row: {
+          column_mapping: Json
+          created_at: string
+          created_by: string | null
+          duplicate_count: number
+          failed_count: number
+          file_name: string
+          id: string
+          imported_count: number
+          invalid_count: number
+          row_results: Json
+          total_rows: number
+          updated_at: string
+        }
+        Insert: {
+          column_mapping?: Json
+          created_at?: string
+          created_by?: string | null
+          duplicate_count?: number
+          failed_count?: number
+          file_name: string
+          id?: string
+          imported_count?: number
+          invalid_count?: number
+          row_results?: Json
+          total_rows?: number
+          updated_at?: string
+        }
+        Update: {
+          column_mapping?: Json
+          created_at?: string
+          created_by?: string | null
+          duplicate_count?: number
+          failed_count?: number
+          file_name?: string
+          id?: string
+          imported_count?: number
+          invalid_count?: number
+          row_results?: Json
+          total_rows?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidate_import_batches_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      candidates: {
+        Row: {
+          applied_category: Database["public"]["Enums"]["user_category"]
+          assigned_hr_id: string | null
+          available_joining_date: string | null
+          candidate_code: string
+          converted_at: string | null
+          converted_invitation_id: string | null
+          converted_user_id: string | null
+          created_at: string
+          created_by: string | null
+          current_company: string | null
+          department_id: string | null
+          designation: string | null
+          email: string
+          expected_ctc: string | null
+          experience_years: number | null
+          full_name: string
+          id: string
+          import_batch_id: string | null
+          linkedin_url: string | null
+          location: string | null
+          notes_summary: string | null
+          notice_period_days: number | null
+          phone: string | null
+          portfolio_url: string | null
+          resume_file_name: string | null
+          resume_path: string | null
+          skills: string[]
+          source: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          applied_category?: Database["public"]["Enums"]["user_category"]
+          assigned_hr_id?: string | null
+          available_joining_date?: string | null
+          candidate_code?: string
+          converted_at?: string | null
+          converted_invitation_id?: string | null
+          converted_user_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          current_company?: string | null
+          department_id?: string | null
+          designation?: string | null
+          email: string
+          expected_ctc?: string | null
+          experience_years?: number | null
+          full_name: string
+          id?: string
+          import_batch_id?: string | null
+          linkedin_url?: string | null
+          location?: string | null
+          notes_summary?: string | null
+          notice_period_days?: number | null
+          phone?: string | null
+          portfolio_url?: string | null
+          resume_file_name?: string | null
+          resume_path?: string | null
+          skills?: string[]
+          source?: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          applied_category?: Database["public"]["Enums"]["user_category"]
+          assigned_hr_id?: string | null
+          available_joining_date?: string | null
+          candidate_code?: string
+          converted_at?: string | null
+          converted_invitation_id?: string | null
+          converted_user_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          current_company?: string | null
+          department_id?: string | null
+          designation?: string | null
+          email?: string
+          expected_ctc?: string | null
+          experience_years?: number | null
+          full_name?: string
+          id?: string
+          import_batch_id?: string | null
+          linkedin_url?: string | null
+          location?: string | null
+          notes_summary?: string | null
+          notice_period_days?: number | null
+          phone?: string | null
+          portfolio_url?: string | null
+          resume_file_name?: string | null
+          resume_path?: string | null
+          skills?: string[]
+          source?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "candidates_assigned_hr_id_fkey"
+            columns: ["assigned_hr_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_converted_invitation_id_fkey"
+            columns: ["converted_invitation_id"]
+            isOneToOne: false
+            referencedRelation: "invitations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_converted_user_id_fkey"
+            columns: ["converted_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "candidates_import_batch_id_fkey"
+            columns: ["import_batch_id"]
+            isOneToOne: false
+            referencedRelation: "candidate_import_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      department_managers: {
+        Row: {
+          assigned_by: string | null
+          created_at: string
+          department_id: string
+          id: string
+          manager_id: string
+        }
+        Insert: {
+          assigned_by?: string | null
+          created_at?: string
+          department_id: string
+          id?: string
+          manager_id: string
+        }
+        Update: {
+          assigned_by?: string | null
+          created_at?: string
+          department_id?: string
+          id?: string
+          manager_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "department_managers_assigned_by_fkey"
+            columns: ["assigned_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "department_managers_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "department_managers_manager_id_fkey"
+            columns: ["manager_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       departments: {
         Row: {
           code: string
@@ -549,6 +841,156 @@ export type Database = {
           {
             foreignKeyName: "documents_user_id_fkey"
             columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      email_messages: {
+        Row: {
+          attempts: number
+          body_html: string
+          body_text: string | null
+          candidate_id: string | null
+          created_at: string
+          delivered_at: string | null
+          error_message: string | null
+          id: string
+          idempotency_key: string
+          interview_id: string | null
+          is_test: boolean
+          provider: string
+          provider_message_id: string | null
+          recipient_email: string
+          recipient_name: string | null
+          sent_at: string | null
+          sent_by: string | null
+          status: string
+          subject: string
+          template_slug: string | null
+          updated_at: string
+          variables_payload: Json
+        }
+        Insert: {
+          attempts?: number
+          body_html: string
+          body_text?: string | null
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key: string
+          interview_id?: string | null
+          is_test?: boolean
+          provider?: string
+          provider_message_id?: string | null
+          recipient_email: string
+          recipient_name?: string | null
+          sent_at?: string | null
+          sent_by?: string | null
+          status?: string
+          subject: string
+          template_slug?: string | null
+          updated_at?: string
+          variables_payload?: Json
+        }
+        Update: {
+          attempts?: number
+          body_html?: string
+          body_text?: string | null
+          candidate_id?: string | null
+          created_at?: string
+          delivered_at?: string | null
+          error_message?: string | null
+          id?: string
+          idempotency_key?: string
+          interview_id?: string | null
+          is_test?: boolean
+          provider?: string
+          provider_message_id?: string | null
+          recipient_email?: string
+          recipient_name?: string | null
+          sent_at?: string | null
+          sent_by?: string | null
+          status?: string
+          subject?: string
+          template_slug?: string | null
+          updated_at?: string
+          variables_payload?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_messages_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_messages_interview_id_fkey"
+            columns: ["interview_id"]
+            isOneToOne: false
+            referencedRelation: "interviews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "email_messages_sent_by_fkey"
+            columns: ["sent_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      email_templates: {
+        Row: {
+          body_html_template: string
+          body_text_template: string | null
+          category: string
+          created_at: string
+          id: string
+          is_active: boolean
+          name: string
+          slug: string
+          subject_template: string
+          updated_at: string
+          updated_by: string | null
+          variables: string[]
+        }
+        Insert: {
+          body_html_template: string
+          body_text_template?: string | null
+          category?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name: string
+          slug: string
+          subject_template: string
+          updated_at?: string
+          updated_by?: string | null
+          variables?: string[]
+        }
+        Update: {
+          body_html_template?: string
+          body_text_template?: string | null
+          category?: string
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          slug?: string
+          subject_template?: string
+          updated_at?: string
+          updated_by?: string | null
+          variables?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "email_templates_updated_by_fkey"
+            columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -909,6 +1351,171 @@ export type Database = {
           },
         ]
       }
+      interview_feedback: {
+        Row: {
+          candidate_id: string
+          communication_rating: number | null
+          concerns: string | null
+          id: string
+          interview_id: string
+          interviewer_id: string
+          notes: string | null
+          rating: number
+          recommendation: string
+          strengths: string | null
+          submitted_at: string
+          technical_rating: number | null
+          updated_at: string
+        }
+        Insert: {
+          candidate_id: string
+          communication_rating?: number | null
+          concerns?: string | null
+          id?: string
+          interview_id: string
+          interviewer_id: string
+          notes?: string | null
+          rating: number
+          recommendation: string
+          strengths?: string | null
+          submitted_at?: string
+          technical_rating?: number | null
+          updated_at?: string
+        }
+        Update: {
+          candidate_id?: string
+          communication_rating?: number | null
+          concerns?: string | null
+          id?: string
+          interview_id?: string
+          interviewer_id?: string
+          notes?: string | null
+          rating?: number
+          recommendation?: string
+          strengths?: string | null
+          submitted_at?: string
+          technical_rating?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interview_feedback_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interview_feedback_interview_id_fkey"
+            columns: ["interview_id"]
+            isOneToOne: false
+            referencedRelation: "interviews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interview_feedback_interviewer_id_fkey"
+            columns: ["interviewer_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      interviews: {
+        Row: {
+          cancel_or_reschedule_reason: string | null
+          candidate_id: string
+          created_at: string
+          id: string
+          instructions: string | null
+          interviewer_ids: string[]
+          lead_interviewer_id: string | null
+          location_details: string | null
+          meeting_link: string | null
+          mode: string
+          office_location_id: string | null
+          round_name: string
+          round_number: number
+          scheduled_by: string | null
+          scheduled_end_at: string
+          scheduled_start_at: string
+          status: string
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          cancel_or_reschedule_reason?: string | null
+          candidate_id: string
+          created_at?: string
+          id?: string
+          instructions?: string | null
+          interviewer_ids?: string[]
+          lead_interviewer_id?: string | null
+          location_details?: string | null
+          meeting_link?: string | null
+          mode?: string
+          office_location_id?: string | null
+          round_name: string
+          round_number?: number
+          scheduled_by?: string | null
+          scheduled_end_at: string
+          scheduled_start_at: string
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Update: {
+          cancel_or_reschedule_reason?: string | null
+          candidate_id?: string
+          created_at?: string
+          id?: string
+          instructions?: string | null
+          interviewer_ids?: string[]
+          lead_interviewer_id?: string | null
+          location_details?: string | null
+          meeting_link?: string | null
+          mode?: string
+          office_location_id?: string | null
+          round_name?: string
+          round_number?: number
+          scheduled_by?: string | null
+          scheduled_end_at?: string
+          scheduled_start_at?: string
+          status?: string
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "interviews_candidate_id_fkey"
+            columns: ["candidate_id"]
+            isOneToOne: false
+            referencedRelation: "candidates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interviews_lead_interviewer_id_fkey"
+            columns: ["lead_interviewer_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interviews_office_location_id_fkey"
+            columns: ["office_location_id"]
+            isOneToOne: false
+            referencedRelation: "office_locations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "interviews_scheduled_by_fkey"
+            columns: ["scheduled_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invitations: {
         Row: {
           accepted_at: string | null
@@ -1225,6 +1832,7 @@ export type Database = {
           joining_date: string | null
           last_working_day: string | null
           mobile: string | null
+          must_change_password: boolean
           needs_assignment: boolean
           permanent_address: string | null
           personal_email: string | null
@@ -1235,6 +1843,7 @@ export type Database = {
           reporting_lead_id: string | null
           skills: string[] | null
           updated_at: string
+          welcome_email_sent_at: string | null
           work_email: string
           work_location: string | null
         }
@@ -1260,6 +1869,7 @@ export type Database = {
           joining_date?: string | null
           last_working_day?: string | null
           mobile?: string | null
+          must_change_password?: boolean
           needs_assignment?: boolean
           permanent_address?: string | null
           personal_email?: string | null
@@ -1270,6 +1880,7 @@ export type Database = {
           reporting_lead_id?: string | null
           skills?: string[] | null
           updated_at?: string
+          welcome_email_sent_at?: string | null
           work_email: string
           work_location?: string | null
         }
@@ -1295,6 +1906,7 @@ export type Database = {
           joining_date?: string | null
           last_working_day?: string | null
           mobile?: string | null
+          must_change_password?: boolean
           needs_assignment?: boolean
           permanent_address?: string | null
           personal_email?: string | null
@@ -1305,6 +1917,7 @@ export type Database = {
           reporting_lead_id?: string | null
           skills?: string[] | null
           updated_at?: string
+          welcome_email_sent_at?: string | null
           work_email?: string
           work_location?: string | null
         }
@@ -1480,6 +2093,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           daily_task_target: number | null
+          department_id: string | null
           description: string | null
           end_date: string | null
           hourly_task_target: number | null
@@ -1487,6 +2101,7 @@ export type Database = {
           max_rejection_rate_pct: number | null
           name: string
           project_lead_id: string | null
+          project_manager_id: string | null
           quality_target_pct: number | null
           required_headcount: number
           shift: Database["public"]["Enums"]["project_shift"] | null
@@ -1502,6 +2117,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           daily_task_target?: number | null
+          department_id?: string | null
           description?: string | null
           end_date?: string | null
           hourly_task_target?: number | null
@@ -1509,6 +2125,7 @@ export type Database = {
           max_rejection_rate_pct?: number | null
           name: string
           project_lead_id?: string | null
+          project_manager_id?: string | null
           quality_target_pct?: number | null
           required_headcount?: number
           shift?: Database["public"]["Enums"]["project_shift"] | null
@@ -1524,6 +2141,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           daily_task_target?: number | null
+          department_id?: string | null
           description?: string | null
           end_date?: string | null
           hourly_task_target?: number | null
@@ -1531,6 +2149,7 @@ export type Database = {
           max_rejection_rate_pct?: number | null
           name?: string
           project_lead_id?: string | null
+          project_manager_id?: string | null
           quality_target_pct?: number | null
           required_headcount?: number
           shift?: Database["public"]["Enums"]["project_shift"] | null
@@ -1549,8 +2168,22 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "projects_department_id_fkey"
+            columns: ["department_id"]
+            isOneToOne: false
+            referencedRelation: "departments"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "projects_project_lead_id_fkey"
             columns: ["project_lead_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "projects_project_manager_id_fkey"
+            columns: ["project_manager_id"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -1940,13 +2573,41 @@ export type Database = {
           worked_minutes: number
         }[]
       }
+      can_actor_assign_role: {
+        Args: {
+          _actor_id: string
+          _role: Database["public"]["Enums"]["app_role"]
+          _target_user_id: string
+        }
+        Returns: boolean
+      }
       can_log_work: {
         Args: { _on_date?: string; _project_id: string; _user_id: string }
+        Returns: boolean
+      }
+      can_manage_project: {
+        Args: { _project_id: string; _user_id: string }
+        Returns: boolean
+      }
+      can_review_subordinate_or_escalate: {
+        Args: { _reviewer_id: string; _subject_user_id: string }
         Returns: boolean
       }
       can_view_project: {
         Args: { _project_id: string; _user_id: string }
         Returns: boolean
+      }
+      current_ist_date: {
+        Args: never
+        Returns: string
+      }
+      claim_next_employee_id: {
+        Args: never
+        Returns: string
+      }
+      peek_next_employee_id: {
+        Args: never
+        Returns: string
       }
       claim_invitations: {
         Args: { _limit: number }
@@ -2002,6 +2663,18 @@ export type Database = {
         Args: { _permission: string; _user_id: string }
         Returns: boolean
       }
+      claim_next_candidate_code: {
+        Args: never
+        Returns: string
+      }
+      is_assigned_interviewer_for_candidate: {
+        Args: { _candidate_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_assigned_to_interview: {
+        Args: { _interview_id: string; _user_id: string }
+        Returns: boolean
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -2013,12 +2686,24 @@ export type Database = {
         Args: { _project_id: string; _user_id: string }
         Returns: boolean
       }
+      is_department_manager: {
+        Args: { _department_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_manager_of: {
+        Args: { _owner: string; _viewer: string }
+        Returns: boolean
+      }
       is_project_lead: {
         Args: { _project_id: string; _user_id: string }
         Returns: boolean
       }
       is_reporting_lead_of: {
         Args: { _lead_id: string; _user_id: string }
+        Returns: boolean
+      }
+      is_supervisor_of: {
+        Args: { _owner: string; _viewer: string }
         Returns: boolean
       }
       is_work_lead_of: {
@@ -2053,7 +2738,7 @@ export type Database = {
         | "active"
         | "paused"
         | "ended"
-      app_role: "super_admin" | "founder" | "hr" | "admin" | "lead" | "employee"
+      app_role: "super_admin" | "founder" | "hr" | "admin" | "manager" | "lead" | "employee"
       approval_decision: "pending" | "approved" | "rejected"
       approval_tier: "lead" | "hr"
       attendance_status:
@@ -2283,7 +2968,7 @@ export const Constants = {
         "paused",
         "ended",
       ],
-      app_role: ["super_admin", "founder", "hr", "admin", "lead", "employee"],
+      app_role: ["super_admin", "founder", "hr", "admin", "manager", "lead", "employee"],
       approval_decision: ["pending", "approved", "rejected"],
       approval_tier: ["lead", "hr"],
       attendance_status: [

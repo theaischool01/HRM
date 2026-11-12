@@ -1,6 +1,19 @@
 import logoUrl from "@/assets/the-ai-school-logo.png";
+import logoOnDarkUrl from "@/assets/the-ai-school-logo-on-dark.png";
 import { cn } from "@/lib/utils";
 
+/**
+ * Official The AI School logo.
+ *
+ * - `variant="dark"` (default): original supplied asset — red "AI SCHOOL",
+ *   black "THE" — for light backgrounds.
+ * - `variant="light"`: approved dark-background variant generated from the same
+ *   source (scripts/build-logo-on-dark.py) — identical red artwork, only "THE"
+ *   turned white, transparent background.
+ *
+ * Never recolour the logo with CSS filters (invert/hue-rotate turn the brand
+ * red into cyan).
+ */
 export function Logo({
   className,
   variant = "dark",
@@ -10,9 +23,11 @@ export function Logo({
 }) {
   return (
     <img
-      src={logoUrl}
+      src={variant === "light" ? logoOnDarkUrl : logoUrl}
       alt="The AI School"
-      className={cn("h-8 w-auto object-contain", variant === "light" && "invert", className)}
+      decoding="async"
+      draggable={false}
+      className={cn("h-8 w-auto max-w-full select-none object-contain", className)}
     />
   );
 }

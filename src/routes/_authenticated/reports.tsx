@@ -20,7 +20,9 @@ import {
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { downloadXlsx, reportFileName } from "@/lib/xlsx-export";
 import { ATTENDANCE_WORK_MODE_LABELS } from "@/lib/enums";
+import { canExportReports } from "@/lib/permissions";
 import { buildAttendanceReport, getReportFilterOptions } from "@/lib/reports.functions";
+import { startOfMonthIso, todayIso } from "@/lib/timezone";
 
 export const Route = createFileRoute("/_authenticated/reports")({
   head: () => ({
@@ -46,6 +48,7 @@ export const Route = createFileRoute("/_authenticated/reports")({
 });
 
 const ALL = "__all__";
+const PAGE_SIZE = 50;
 const CATEGORIES = [
   ["full_time", "Full time"],
   ["intern", "Intern"],
@@ -53,20 +56,14 @@ const CATEGORIES = [
   ["trainer", "Trainer"],
 ] as const;
 
-function monthStart() {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
-}
-
 function ReportsPage() {
   useSuspenseQuery(actorQueryOptions);
   const actor = useActor();
-  const allowed =
-    actor.can("attendance:read:all") &&
-    actor.roles.some((r) => ["super_admin", "admin", "hr"].includes(r));
+  const allowed = canExportReports(actor.roles, actor.permissions);
 
   const [type, setType] = useState<"employee" | "project">("employee");
-  const [from, setFrom] = useState(monthStart());
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10));
+  const [from, setFrom] = useState(() => startOfMonthIso());
+  const [to, setTo] = useState(() => todayIso());
   const [projectId, setProjectId] = useState(ALL);
   const [departmentId, setDepartmentId] = useState(ALL);
   const [category, setCategory] = useState(ALL);
@@ -74,6 +71,7 @@ function ReportsPage() {
   const [workMode, setWorkMode] = useState(ALL);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<Record<string, string | number | null>[] | null>(null);
+  const [page, setPage] = useState(0);
 
   const { data: options } = useQuery({
     queryKey: ["report-options"],
@@ -85,9 +83,30 @@ function ReportsPage() {
     return (
       <AccessDenied
         kind="forbidden"
-        detail="Attendance exports are available to Super Admin, Admin and HR only."
+        detail="Attendance exports are available to Super Admin, Founder, HR, Admin and Manager only."
       />
     );
+  }
+
+  const hasOptionalFilters =
+    projectId !== ALL ||
+    departmentId !== ALL ||
+    category !== ALL ||
+    userId !== ALL ||
+    workMode !== ALL;
+
+  function resetPreview() {
+    setPreview(null);
+    setPage(0);
+  }
+
+  function resetOptionalFilters() {
+    setProjectId(ALL);
+    setDepartmentId(ALL);
+    setCategory(ALL);
+    setUserId(ALL);
+    setWorkMode(ALL);
+    resetPreview();
   }
 
   const filter = {
@@ -105,6 +124,7 @@ function ReportsPage() {
     try {
       const result = await buildAttendanceReport({ data: { type, filter } });
       setPreview(result.rows);
+      setPage(0);
       if (result.rows.length === 0) toast.info("No attendance rows matched those filters.");
       return result.rows;
     } catch (error) {
@@ -139,6 +159,11 @@ function ReportsPage() {
   }
 
   const headers = preview?.[0] ? Object.keys(preview[0]) : [];
+  const totalRows = preview?.length ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageStart = safePage * PAGE_SIZE;
+  const pagedRows = preview ? preview.slice(pageStart, pageStart + PAGE_SIZE) : [];
 
   return (
     <AppShell
@@ -155,9 +180,17 @@ function ReportsPage() {
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-3">
             <div className="space-y-1.5">
-              <Label>Export type</Label>
-              <Select value={type} onValueChange={(v) => { setType(v as typeof type); setPreview(null); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Label htmlFor="report-type">Export type</Label>
+              <Select
+                value={type}
+                onValueChange={(v) => {
+                  setType(v as typeof type);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-type">
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="employee">Employee-wise attendance</SelectItem>
                   <SelectItem value="project">Project-wise attendance</SelectItem>
@@ -166,75 +199,148 @@ function ReportsPage() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="from">From</Label>
-              <Input id="from" type="date" value={from} onChange={(e) => { setFrom(e.target.value); setPreview(null); }} />
+              <Input
+                id="from"
+                type="date"
+                value={from}
+                onChange={(e) => {
+                  setFrom(e.target.value);
+                  resetPreview();
+                }}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="to">To</Label>
-              <Input id="to" type="date" value={to} onChange={(e) => { setTo(e.target.value); setPreview(null); }} />
+              <Input
+                id="to"
+                type="date"
+                value={to}
+                onChange={(e) => {
+                  setTo(e.target.value);
+                  resetPreview();
+                }}
+              />
             </div>
 
             <div className="space-y-1.5">
-              <Label>Project</Label>
-              <Select value={projectId} onValueChange={(v) => { setProjectId(v); setPreview(null); }}>
-                <SelectTrigger><SelectValue placeholder="All projects" /></SelectTrigger>
+              <Label htmlFor="report-project">Project</Label>
+              <Select
+                value={projectId}
+                onValueChange={(v) => {
+                  setProjectId(v);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-project">
+                  <SelectValue placeholder="All projects" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All projects</SelectItem>
                   {(options?.projects ?? []).map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.code} — {p.name}</SelectItem>
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.code} — {p.name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Department</Label>
-              <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setPreview(null); }}>
-                <SelectTrigger><SelectValue placeholder="All departments" /></SelectTrigger>
+              <Label htmlFor="report-department">Department</Label>
+              <Select
+                value={departmentId}
+                onValueChange={(v) => {
+                  setDepartmentId(v);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-department">
+                  <SelectValue placeholder="All departments" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All departments</SelectItem>
                   {(options?.departments ?? []).map((d) => (
-                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                    <SelectItem key={d.id} value={d.id}>
+                      {d.name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Employment type</Label>
-              <Select value={category} onValueChange={(v) => { setCategory(v); setPreview(null); }}>
-                <SelectTrigger><SelectValue placeholder="All types" /></SelectTrigger>
+              <Label htmlFor="report-category">Employment type</Label>
+              <Select
+                value={category}
+                onValueChange={(v) => {
+                  setCategory(v);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-category">
+                  <SelectValue placeholder="All types" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All types</SelectItem>
                   {CATEGORIES.map(([value, label]) => (
-                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Employee</Label>
-              <Select value={userId} onValueChange={(v) => { setUserId(v); setPreview(null); }}>
-                <SelectTrigger><SelectValue placeholder="Everyone" /></SelectTrigger>
+              <Label htmlFor="report-employee">Employee</Label>
+              <Select
+                value={userId}
+                onValueChange={(v) => {
+                  setUserId(v);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-employee">
+                  <SelectValue placeholder="Everyone" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>Everyone</SelectItem>
                   {(options?.people ?? []).map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.full_name}</SelectItem>
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.full_name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Work mode</Label>
-              <Select value={workMode} onValueChange={(v) => { setWorkMode(v); setPreview(null); }}>
-                <SelectTrigger><SelectValue placeholder="All modes" /></SelectTrigger>
+              <Label htmlFor="report-workmode">Work mode</Label>
+              <Select
+                value={workMode}
+                onValueChange={(v) => {
+                  setWorkMode(v);
+                  resetPreview();
+                }}
+              >
+                <SelectTrigger id="report-workmode">
+                  <SelectValue placeholder="All modes" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={ALL}>All modes</SelectItem>
                   {Object.entries(ATTENDANCE_WORK_MODE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>{label}</SelectItem>
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end gap-2">
-              <Button onClick={() => void generate()} disabled={busy}>Generate preview</Button>
+            <div className="flex flex-wrap items-end gap-2">
+              <Button onClick={() => void generate()} disabled={busy || !from || !to}>
+                {busy ? "Generating…" : "Generate preview"}
+              </Button>
+              {hasOptionalFilters ? (
+                <Button variant="ghost" onClick={resetOptionalFilters} disabled={busy}>
+                  Reset filters
+                </Button>
+              ) : null}
             </div>
           </CardContent>
         </Card>
@@ -242,34 +348,91 @@ function ReportsPage() {
         {preview ? (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">{preview.length} rows</CardTitle>
-              <CardDescription>Showing the first 25 rows; the export contains all of them.</CardDescription>
+              <CardTitle className="text-base tabular-nums">
+                {totalRows} {totalRows === 1 ? "row" : "rows"}
+              </CardTitle>
+              <CardDescription>
+                {totalRows === 0
+                  ? "No attendance rows matched the selected filters."
+                  : `Showing rows ${pageStart + 1}–${Math.min(pageStart + PAGE_SIZE, totalRows)} of ${totalRows}; the downloaded export contains all ${totalRows} rows.`}
+              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" onClick={() => void exportCsv()} disabled={busy || preview.length === 0}>
-                  <Download className="mr-1.5 size-4" /> Download CSV
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => void exportXlsx()} disabled={busy || preview.length === 0}>
-                  <Download className="mr-1.5 size-4" /> Download Excel
-                </Button>
-              </div>
-              <div className="max-h-[28rem] overflow-auto rounded-md border">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-muted text-left uppercase tracking-wide">
-                    <tr>{headers.map((h) => <th key={h} className="whitespace-nowrap px-2 py-2">{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {preview.slice(0, 25).map((row, i) => (
-                      <tr key={i} className={i % 2 ? "bg-muted/40" : undefined}>
-                        {headers.map((h) => (
-                          <td key={h} className="whitespace-nowrap px-2 py-1.5">{row[h] ?? ""}</td>
+              {totalRows > 0 ? (
+                <>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void exportCsv()}
+                        disabled={busy}
+                      >
+                        <Download className="mr-1.5 size-4" /> Download CSV
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void exportXlsx()}
+                        disabled={busy}
+                      >
+                        <Download className="mr-1.5 size-4" /> Download Excel
+                      </Button>
+                    </div>
+                    {totalPages > 1 ? (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={safePage === 0}
+                          onClick={() => setPage((p) => Math.max(0, p - 1))}
+                        >
+                          Previous
+                        </Button>
+                        <span className="tabular-nums">
+                          Page {safePage + 1} of {totalPages}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={safePage >= totalPages - 1}
+                          onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                        >
+                          Next
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="max-h-[28rem] overflow-auto rounded-md border">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-muted text-left uppercase tracking-wide">
+                        <tr>
+                          {headers.map((h) => (
+                            <th key={h} scope="col" className="whitespace-nowrap px-2.5 py-2">
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedRows.map((row, i) => (
+                          <tr key={pageStart + i} className={i % 2 ? "bg-muted/40" : undefined}>
+                            {headers.map((h) => (
+                              <td key={h} className="whitespace-nowrap px-2.5 py-1.5">
+                                {row[h] ?? ""}
+                              </td>
+                            ))}
+                          </tr>
                         ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="rounded-md border border-dashed py-6 text-center text-sm text-muted-foreground">
+                  Adjust the date range or optional filters above and generate again.
+                </p>
+              )}
             </CardContent>
           </Card>
         ) : null}

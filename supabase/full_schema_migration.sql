@@ -1,6 +1,6 @@
 -- ==============================================================================
 -- THE AI SCHOOL HRM PORTAL: FULL DATABASE MIGRATION & SCHEMA INITIALIZATION
--- Run this in the Supabase SQL Editor for project: qnvatbsbromzyjbddpif
+-- Run this in the Supabase SQL Editor for project: odowmzjjnfjaotpctper
 -- ==============================================================================
 
 -- 1. EXTENSIONS

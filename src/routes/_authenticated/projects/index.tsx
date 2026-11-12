@@ -6,9 +6,9 @@ import {
 } from "@/lib/enums";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { FolderKanban, Plus } from "lucide-react";
+import { FolderKanban, Plus, Search } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
@@ -55,18 +55,20 @@ export const Route = createFileRoute("/_authenticated/projects/")({
   errorComponent: ({ error }) => errorToAccessScreen(error),
 });
 
-const STATUS_TONE: Record<string, string> = {
-  draft: "bg-muted text-muted-foreground",
-  active: "bg-emerald-100 text-emerald-800",
-  on_hold: "bg-amber-100 text-amber-900",
-  completed: "bg-sky-100 text-sky-900",
-  archived: "bg-muted text-muted-foreground",
-};
+function projectStatusVariant(
+  status: string,
+): "success" | "warning" | "info" | "neutral" | "secondary" {
+  if (status === "active") return "success";
+  if (status === "on_hold") return "warning";
+  if (status === "completed") return "info";
+  if (status === "draft" || status === "archived") return "neutral";
+  return "secondary";
+}
 
 function ProjectsPage() {
   const actor = useActor();
   const queryClient = useQueryClient();
-  const canManage = actor.can("projects:manage:all");
+  const canManage = actor.can("projects:manage:all") || actor.can("projects:manage:team");
   const { data: projects } = useSuspenseQuery({
     queryKey: ["projects"],
     queryFn: () => listProjects(),
@@ -78,11 +80,28 @@ function ProjectsPage() {
 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  const filteredProjects = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return projects.filter((p) => {
+      if (statusFilter !== "all" && p.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.code.toLowerCase().includes(q) ||
+        (p.client_name ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [projects, search, statusFilter]);
   const [form, setForm] = useState({
     code: "",
     name: "",
     clientName: "",
     description: "",
+    departmentId: "",
+    projectManagerId: "",
     startDate: "",
     endDate: "",
     projectLeadId: "",
@@ -109,6 +128,8 @@ function ProjectsPage() {
           name: form.name,
           clientName: form.clientName || null,
           description: form.description || null,
+          departmentId: form.departmentId || null,
+          projectManagerId: form.projectManagerId || null,
           startDate: form.startDate || null,
           endDate: form.endDate || null,
           projectLeadId: form.projectLeadId || null,
@@ -155,29 +176,39 @@ function ProjectsPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={submit} className="grid gap-4 md:grid-cols-3">
-              <Field label="Project code">
+              <Field label="Project code" htmlFor="code">
                 <Input id="code" required value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
               </Field>
-              <Field label="Project name">
+              <Field label="Project name" htmlFor="name">
                 <Input id="name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </Field>
-              <Field label="Client">
+              <Field label="Client" htmlFor="clientName">
                 <Input id="clientName" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} />
               </Field>
               <div className="md:col-span-3">
-                <Field label="Description">
+                <Field label="Description" htmlFor="description">
                   <Textarea id="description" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </Field>
               </div>
-              <Field label="Start date">
+              <Field label="Start date" htmlFor="startDate">
                 <Input id="startDate" type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
               </Field>
-              <Field label="End date">
+              <Field label="End date" htmlFor="endDate">
                 <Input id="endDate" type="date" value={form.endDate} onChange={(e) => setForm({ ...form, endDate: e.target.value })} />
               </Field>
-              <Field label="Project lead">
-                <Select value={form.projectLeadId} onValueChange={(v) => setForm({ ...form, projectLeadId: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select a lead" /></SelectTrigger>
+              <Field label="Department" htmlFor="proj-dept">
+                <Select value={form.departmentId} onValueChange={(v) => setForm({ ...form, departmentId: v })}>
+                  <SelectTrigger id="proj-dept"><SelectValue placeholder="Select department" /></SelectTrigger>
+                  <SelectContent>
+                    {reference.departments.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Project manager" htmlFor="proj-mgr">
+                <Select value={form.projectManagerId} onValueChange={(v) => setForm({ ...form, projectManagerId: v })}>
+                  <SelectTrigger id="proj-mgr"><SelectValue placeholder="Select manager" /></SelectTrigger>
                   <SelectContent>
                     {reference.people.map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.full_name}</SelectItem>
@@ -185,9 +216,19 @@ function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Work mode">
+              <Field label="Project lead" htmlFor="proj-lead">
+                <Select value={form.projectLeadId} onValueChange={(v) => setForm({ ...form, projectLeadId: v })}>
+                  <SelectTrigger id="proj-lead"><SelectValue placeholder="Select a lead" /></SelectTrigger>
+                  <SelectContent>
+                    {reference.people.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.full_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Work mode" htmlFor="proj-workmode">
                 <Select value={form.workMode} onValueChange={(v) => setForm({ ...form, workMode: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="proj-workmode"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {PROJECT_WORK_MODES.map((m) => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
@@ -195,7 +236,7 @@ function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Shift">
+              <Field label="Shift" htmlFor="shift">
                 <Select value={form.shift} onValueChange={(v) => setForm({ ...form, shift: v })}>
                   <SelectTrigger id="shift"><SelectValue placeholder="Select shift" /></SelectTrigger>
                   <SelectContent>
@@ -205,7 +246,7 @@ function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Task unit">
+              <Field label="Task unit" htmlFor="taskUnit">
                 <Select value={form.taskUnit} onValueChange={(v) => setForm({ ...form, taskUnit: v })}>
                   <SelectTrigger id="taskUnit"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -215,19 +256,19 @@ function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Hourly task target">
+              <Field label="Hourly task target" htmlFor="hourlyTaskTarget">
                 <Input id="hourlyTaskTarget" type="number" step="0.01" value={form.hourlyTaskTarget} onChange={(e) => setForm({ ...form, hourlyTaskTarget: e.target.value })} />
               </Field>
-              <Field label="Daily task target">
+              <Field label="Daily task target" htmlFor="dailyTaskTarget">
                 <Input id="dailyTaskTarget" type="number" step="0.01" value={form.dailyTaskTarget} onChange={(e) => setForm({ ...form, dailyTaskTarget: e.target.value })} />
               </Field>
-              <Field label="Quality target %">
+              <Field label="Quality target %" htmlFor="qualityTargetPct">
                 <Input id="qualityTargetPct" type="number" step="0.01" value={form.qualityTargetPct} onChange={(e) => setForm({ ...form, qualityTargetPct: e.target.value })} />
               </Field>
-              <Field label="Max rejection rate %">
+              <Field label="Max rejection rate %" htmlFor="maxRejectionRatePct">
                 <Input id="maxRejectionRatePct" type="number" step="0.01" value={form.maxRejectionRatePct} onChange={(e) => setForm({ ...form, maxRejectionRatePct: e.target.value })} />
               </Field>
-              <Field label="Required headcount">
+              <Field label="Required headcount" htmlFor="requiredHeadcount">
                 <Input id="requiredHeadcount" type="number" value={form.requiredHeadcount} onChange={(e) => setForm({ ...form, requiredHeadcount: e.target.value })} />
               </Field>
               <div className="md:col-span-3">
@@ -238,6 +279,37 @@ function ProjectsPage() {
         </Card>
       ) : null}
 
+      {/* Search & Status Filter */}
+      {projects.length > 0 && (
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Project status filter">
+            {(["all", "active", "on_hold", "draft", "completed", "archived"] as const).map((st) => (
+              <Button
+                key={st}
+                type="button"
+                size="sm"
+                aria-pressed={statusFilter === st}
+                variant={statusFilter === st ? "default" : "outline"}
+                onClick={() => setStatusFilter(st)}
+                className="capitalize"
+              >
+                {st === "all" ? `All (${projects.length})` : st.replace("_", " ")}
+              </Button>
+            ))}
+          </div>
+          <div className="relative w-full sm:w-72">
+            <Search className="pointer-events-none absolute top-2.5 left-2.5 size-4 text-muted-foreground" />
+            <Input
+              aria-label="Search projects"
+              placeholder="Search project, code, client..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+        </div>
+      )}
+
       {projects.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-14 text-center">
@@ -247,59 +319,103 @@ function ProjectsPage() {
             </p>
           </CardContent>
         </Card>
+      ) : filteredProjects.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+            <FolderKanban className="size-6 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">No projects match your filter</p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("all");
+              }}
+            >
+              Reset filters
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {projects.map((project) => (
-            <Link key={project.id} to="/projects/$projectId" params={{ projectId: project.id }}>
-              <Card className="h-full transition-colors hover:border-primary/40">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-base">{project.name}</CardTitle>
-                      <CardDescription>
-                        {project.code}
-                        {project.client_name ? ` · ${project.client_name}` : ""}
-                      </CardDescription>
+          {filteredProjects.map((project) => {
+            const req = Math.max(project.required_headcount ?? 0, 1);
+            const capacityPct = Math.min(100, Math.round((project.allocated_count / req) * 100));
+            return (
+              <Link
+                key={project.id}
+                to="/projects/$projectId"
+                params={{ projectId: project.id }}
+                className="block rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Card className="h-full transition-colors hover:border-primary/40">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <CardTitle className="truncate text-base">{project.name}</CardTitle>
+                        <CardDescription className="truncate">
+                          {project.code}
+                          {project.client_name ? ` · ${project.client_name}` : ""}
+                        </CardDescription>
+                      </div>
+                      <Badge variant={projectStatusVariant(project.status)} className="shrink-0 capitalize">
+                        {project.status.replace("_", " ")}
+                      </Badge>
                     </div>
-                    <Badge className={STATUS_TONE[project.status] ?? ""} variant="secondary">
-                      {project.status.replace("_", " ")}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-1.5 text-sm text-muted-foreground">
-                  <p>
-                    Staffed{" "}
-                    <span className="font-medium text-foreground tabular-nums">
-                      {project.allocated_count}/{project.required_headcount}
-                    </span>
-                  </p>
-                  {project.daily_task_target ? (
-                    <p>
-                      Daily target{" "}
-                      <span className="font-medium text-foreground tabular-nums">
-                        {project.daily_task_target} {project.task_unit}
-                      </span>
-                    </p>
-                  ) : null}
-                  {project.pending_ack_count > 0 ? (
-                    <p className="text-amber-700">
-                      {project.pending_ack_count} awaiting acknowledgment
-                    </p>
-                  ) : null}
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm text-muted-foreground">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span>Staffed</span>
+                        <span className="font-medium text-foreground tabular-nums">
+                          {project.allocated_count}/{project.required_headcount}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-primary transition-all"
+                          style={{ width: `${capacityPct}%` }}
+                        />
+                      </div>
+                    </div>
+                    {project.daily_task_target ? (
+                      <p className="text-xs">
+                        Daily target{" "}
+                        <span className="font-medium text-foreground tabular-nums">
+                          {project.daily_task_target} {project.task_unit}
+                        </span>
+                      </p>
+                    ) : null}
+                    {project.pending_ack_count > 0 ? (
+                      <p className="text-xs font-medium text-warning">
+                        {project.pending_ack_count} awaiting acknowledgment
+                      </p>
+                    ) : null}
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
         </div>
       )}
     </AppShell>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string | undefined;
+  children: React.ReactNode;
+}) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Label htmlFor={htmlFor} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
       {children}
     </div>
   );

@@ -102,8 +102,10 @@ async function freezeHeaderRow(buffer: ArrayBuffer): Promise<Uint8Array> {
 }
 
 
+import { todayIso } from "./timezone";
+
 /** Filenames like employee_attendance_2026-08-01_to_2026-08-31_generated_20260825 */
 export function reportFileName(prefix: string, from: string, to: string, ext: string) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const stamp = todayIso().replace(/-/g, "");
   return `${prefix}_${from}_to_${to}_generated_${stamp}.${ext}`;
 }

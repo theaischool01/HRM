@@ -16,8 +16,8 @@ describe("routeRequest", () => {
     expect(route.blocked).toBe(false);
   });
 
-  it("sends admin-tier requests to HR only", () => {
-    for (const role of ["admin", "founder", "super_admin"] as const) {
+  it("sends manager and admin-tier requests to HR only", () => {
+    for (const role of ["manager", "admin", "founder", "super_admin"] as const) {
       const route = routeRequest({ submitterRoles: [role], reportingLeadId: null });
       expect(route.tiers).toEqual(["hr"]);
       expect(route.blocked).toBe(false);
@@ -51,8 +51,9 @@ describe("needsReportingLead", () => {
     ).toBe(true);
   });
 
-  it("does not flag leads or admin tier", () => {
+  it("does not flag leads, managers, or admin tier", () => {
     expect(needsReportingLead({ roles: ["lead"], reportingLeadId: null })).toBe(false);
+    expect(needsReportingLead({ roles: ["manager"], reportingLeadId: null })).toBe(false);
     expect(needsReportingLead({ roles: ["hr"], reportingLeadId: null })).toBe(false);
   });
 

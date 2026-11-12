@@ -197,6 +197,28 @@ export async function buildProjectReport(
   if (filter.projectIds?.length) allocationQuery = allocationQuery.in("project_id", filter.projectIds);
   const { data: allocations } = await allocationQuery;
 
+  // Load per-project task entries in the date window so multi-project days
+  // attribute units to the exact project they were logged against.
+  const { data: projectEntries } = await supabase
+    .from("task_entries")
+    .select("user_id, project_id, units_completed, units_assigned, attendance_days!inner(work_date)")
+    .gte("attendance_days.work_date", filter.from)
+    .lte("attendance_days.work_date", filter.to);
+
+  const projectUnitsMap = new Map<string, { completed: number; assigned: number }>();
+  const dayHasEntriesSet = new Set<string>();
+  for (const entry of projectEntries ?? []) {
+    const workDate = (entry.attendance_days as { work_date?: string } | null)?.work_date;
+    if (!workDate) continue;
+    const dayKey = `${entry.user_id}::${workDate}`;
+    dayHasEntriesSet.add(dayKey);
+    const projKey = `${entry.user_id}::${workDate}::${entry.project_id}`;
+    const prev = projectUnitsMap.get(projKey) ?? { completed: 0, assigned: 0 };
+    prev.completed += Number(entry.units_completed ?? 0);
+    prev.assigned += Number(entry.units_assigned ?? 0);
+    projectUnitsMap.set(projKey, prev);
+  }
+
   const emailToId = new Map(
     [...ctx.profiles.values()].map((p) => [p.work_email.toLowerCase(), p.id]),
   );
@@ -213,6 +235,9 @@ export async function buildProjectReport(
     );
     if (matches.length === 0) continue;
 
+    const dayKey = `${userId}::${date}`;
+    const hasSpecificEntries = dayHasEntriesSet.has(dayKey);
+
     for (const allocation of matches) {
       const project = allocation.projects as unknown as {
         code?: string;
@@ -223,7 +248,24 @@ export async function buildProjectReport(
       } | null;
       const dailyTarget =
         allocation.daily_task_target ?? project?.daily_task_target ?? null;
-      const completed = Number(dayRow["Tasks Completed"] ?? 0);
+
+      const projKey = `${userId}::${date}::${allocation.project_id}`;
+      const projStats = projectUnitsMap.get(projKey);
+      const completed = hasSpecificEntries
+        ? (projStats?.completed ?? 0)
+        : matches.length === 1
+          ? Number(dayRow["Tasks Completed"] ?? 0)
+          : 0;
+      const assigned = hasSpecificEntries
+        ? (projStats?.assigned ?? 0)
+        : matches.length === 1
+          ? Number(dayRow["Tasks Assigned"] ?? 0)
+          : 0;
+      const achievementPct =
+        dailyTarget == null || Number(dailyTarget) === 0
+          ? ""
+          : round2((completed / Number(dailyTarget)) * 100);
+
       rows.push({
         "Project Code": project?.code ?? "",
         "Project Name": project?.name ?? "",
@@ -232,12 +274,12 @@ export async function buildProjectReport(
         "Allocation %": allocation.allocation_pct ?? "",
         "Allocated Hours/Day": allocation.hours_per_day ?? "",
         ...dayRow,
+        "Tasks Assigned": assigned,
+        "Tasks Completed": completed,
+        "Target Achievement %": achievementPct,
         "Project Daily Target": dailyTarget ?? "",
         "Tasks vs Target": dailyTarget == null ? "" : round2(completed - Number(dailyTarget)),
-        "Tasks vs Target %":
-          dailyTarget == null || Number(dailyTarget) === 0
-            ? ""
-            : round2((completed / Number(dailyTarget)) * 100),
+        "Tasks vs Target %": achievementPct,
         "Project Quality Target %": project?.quality_target_pct ?? "",
       });
     }

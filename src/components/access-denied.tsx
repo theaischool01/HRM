@@ -36,16 +36,19 @@ export function AccessDenied({
   const Icon = copy.icon;
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
+    <div
+      role={kind === "signed-out" ? undefined : "alert"}
+      className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-4 py-8 text-center sm:px-6"
+    >
       <Logo className="h-8" />
       <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-        <Icon className="size-5 text-muted-foreground" />
+        <Icon className="size-5 text-muted-foreground" aria-hidden="true" />
       </div>
-      <div className="max-w-md space-y-2">
+      <div className="w-full max-w-md space-y-2">
         <h1 className="font-display text-xl font-semibold">{copy.title}</h1>
         <p className="text-sm text-muted-foreground">{copy.body}</p>
         {detail ? (
-          <p className="rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
+          <p className="max-w-full break-words rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
             {detail}
           </p>
         ) : null}

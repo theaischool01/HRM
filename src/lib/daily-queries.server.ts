@@ -2,15 +2,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/integrations/supabase/types";
 import { normaliseMetrics, type DayMetrics } from "./daily.server";
+import { todayIso } from "./timezone";
+
+export { todayIso };
 
 type Client = SupabaseClient<Database>;
 
 export const ENTRY_SELECT =
   "id, day_id, project_id, allocation_id, slot_type, started_at, ended_at, task_description, units_completed, units_assigned, units_approved, units_rejected, status, reviewer_id, reviewed_at, review_note";
-
-export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 export async function loadMetrics(supabase: Client, dayId: string): Promise<DayMetrics> {
   const { data, error } = await supabase.rpc("attendance_day_metrics", { _day_id: dayId });
@@ -30,7 +29,7 @@ export async function loadWorkableAllocations(supabase: Client, userId: string) 
   const { data, error } = await supabase
     .from("project_allocations")
     .select(
-      "id, project_id, reporting_lead_id, hours_per_day, daily_task_target, quality_target_pct, max_rejection_rate_pct, status, acknowledged_at, start_date, end_date, projects(id, code, name, client_name, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, project_lead_id)",
+      "id, project_id, reporting_lead_id, hours_per_day, daily_task_target, quality_target_pct, max_rejection_rate_pct, status, acknowledged_at, start_date, end_date, projects(id, code, name, client_name, work_mode, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, project_lead_id)",
     )
     .eq("user_id", userId)
     .eq("status", "active")
