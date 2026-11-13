@@ -38,7 +38,7 @@ describe("Manager Attendance Eligibility without Project Allocation", () => {
     const hydOffice: OfficeLocation = {
       id: "office-hyd",
       name: "Hyderabad HQ",
-      code: "HYD-01",
+      address: "Hyderabad",
       latitude: 17.448294,
       longitude: 78.391485,
       radius_meters: 200,
