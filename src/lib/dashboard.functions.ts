@@ -25,6 +25,8 @@ import {
   selectProjectsSafe,
 } from "./schema-compat.server";
 import { daysAgoIso, todayIso } from "./timezone";
+import { excludeProtectedAccounts } from "./work-type";
+import { loadProtectedAccountIds } from "./work-type.server";
 
 export type DashboardQueueItem = {
   id: string;
@@ -140,18 +142,18 @@ export const getRoleDashboard = createServerFn({ method: "GET" })
       deptMgrRes,
       projectsRes,
       oversightRowsRaw,
-      { data: workforceProfilesRaw },
+      { data: workforceProfilesAll },
       { data: userRoleRows },
       { data: activeAllocsRaw },
-      { data: pendingDocsRaw },
-      { data: actionableRequestsRaw },
-      { data: pendingTasksRaw },
-      { data: pendingEodsRaw },
-      { data: openBlockersRaw },
+      { data: pendingDocsAll },
+      { data: actionableRequestsAll },
+      { data: pendingTasksAll },
+      { data: pendingEodsAll },
+      { data: openBlockersAll },
       { data: invitationsRaw },
       { data: officesRaw },
       { data: automationRunsRaw },
-      { data: automationFlagsRaw },
+      { data: automationFlagsAll },
       { data: auditLogsRaw },
     ] = await Promise.all([
       // Personal profile & onboarding state
@@ -330,6 +332,17 @@ export const getRoleDashboard = createServerFn({ method: "GET" })
             .limit(8)
         : Promise.resolve({ data: [] as never[] }),
     ]);
+
+    // Protected system-owner accounts are excluded from every workforce total,
+    // queue and list on every dashboard (HR, Manager, Lead, Founder, Admin, SA).
+    const protectedIds = await loadProtectedAccountIds(supabase);
+    const workforceProfilesRaw = excludeProtectedAccounts(workforceProfilesAll ?? [], protectedIds);
+    const pendingDocsRaw = excludeProtectedAccounts(pendingDocsAll ?? [], protectedIds);
+    const actionableRequestsRaw = excludeProtectedAccounts(actionableRequestsAll ?? [], protectedIds);
+    const pendingTasksRaw = excludeProtectedAccounts(pendingTasksAll ?? [], protectedIds);
+    const pendingEodsRaw = excludeProtectedAccounts(pendingEodsAll ?? [], protectedIds);
+    const openBlockersRaw = excludeProtectedAccounts(openBlockersAll ?? [], protectedIds);
+    const automationFlagsRaw = excludeProtectedAccounts(automationFlagsAll ?? [], protectedIds);
 
     // 3. Personal day details (when the actor has a day row today or is operational staff)
     let myTaskEntriesToday: {

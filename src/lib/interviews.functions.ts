@@ -142,6 +142,8 @@ export const listInterviews = createServerFn({ method: "GET" })
     }
 
     const interviewerOptions = (activeProfiles ?? [])
+      // Protected system-owner accounts never appear in workforce selectors.
+      .filter((p) => !rolesByUser.get(p.id)?.has("super_admin"))
       .filter((p) => rolesByUser.has(p.id))
       .map((p) => ({
         id: p.id,

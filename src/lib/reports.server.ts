@@ -9,6 +9,8 @@ import { ATTENDANCE_STATUS_LABELS } from "./daily.server";
 import { ATTENDANCE_WORK_MODE_LABELS } from "./enums";
 import { loadOversightRows, type OversightRow } from "./oversight.server";
 import { CATEGORY_LABELS, type UserCategory } from "./permissions";
+import { excludeProtectedAccounts } from "./work-type";
+import { loadProtectedAccountIds } from "./work-type.server";
 
 type Client = SupabaseClient<Database>;
 
@@ -63,14 +65,16 @@ export type ReportContext = {
 };
 
 export async function loadReportContext(supabase: Client): Promise<ReportContext> {
-  const [{ data: profiles }, { data: departments }] = await Promise.all([
+  const [{ data: profiles }, { data: departments }, protectedIds] = await Promise.all([
     supabase
       .from("profiles")
       .select("id, full_name, work_email, category, designation, department_id, employee_code"),
     supabase.from("departments").select("id, name"),
+    loadProtectedAccountIds(supabase),
   ]);
+  const visibleProfiles = excludeProtectedAccounts(profiles ?? [], protectedIds);
   return {
-    profiles: new Map((profiles ?? []).map((p) => [p.id, p as ProfileLite])),
+    profiles: new Map(visibleProfiles.map((p) => [p.id, p as ProfileLite])),
     departments: new Map((departments ?? []).map((d) => [d.id, d.name])),
   };
 }

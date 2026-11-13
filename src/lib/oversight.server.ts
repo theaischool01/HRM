@@ -12,6 +12,8 @@ import {
 } from "./daily.server";
 import { loadProfileNames, nameOf } from "./profile-names.server";
 import { todayIso } from "./timezone";
+import { excludeProtectedAccounts } from "./work-type";
+import { loadProfileWorkTypes, loadProtectedAccountIds } from "./work-type.server";
 
 type Client = SupabaseClient<Database>;
 
@@ -136,6 +138,7 @@ function deriveDayStatusInMemory(
   metrics: DayMetrics,
   eodStatus: string | null,
   today: string,
+  hourlyLoggingExpected = true,
 ): string {
   if (day.exception_type === "holiday") return "holiday";
   if (day.exception_type === "weekly_off") return "weekly_off";
@@ -155,7 +158,8 @@ function deriveDayStatusInMemory(
   const worked = metrics.workedMinutes;
 
   if (worked < required * 0.5) return "half_day";
-  if (worked > 0 && metrics.uncoveredMinutes > worked * 0.25) return "review_required";
+  if (worked > 0 && hourlyLoggingExpected && metrics.uncoveredMinutes > worked * 0.25)
+    return "review_required";
   if (metrics.unsubmittedEntries > 0) return "review_required";
   if (!eodStatus || eodStatus === "draft") return "present_eod_pending";
   if (worked + 15 < required) return "present_hours_incomplete";
@@ -183,9 +187,18 @@ export async function loadOversightRows(
     .limit(500);
   if (filter.userId) query = query.eq("user_id", filter.userId);
 
-  const { data: days, error } = await query;
+  const { data: rawDays, error } = await query;
   if (error) throw error;
-  if (!days || days.length === 0) return [];
+  if (!rawDays || rawDays.length === 0) return [];
+
+  // Protected system-owner accounts never appear in oversight, dashboards,
+  // reports or exports (RLS also hides them once the privacy migration is live).
+  const [protectedIds, workTypes] = await Promise.all([
+    loadProtectedAccountIds(supabase),
+    loadProfileWorkTypes(supabase, [...new Set(rawDays.map((d) => d.user_id))]),
+  ]);
+  const days = excludeProtectedAccounts(rawDays, protectedIds);
+  if (days.length === 0) return [];
 
   const dayIds = days.map((d) => d.id);
   const userIds = [...new Set(days.map((d) => d.user_id))];
@@ -281,7 +294,15 @@ export async function loadOversightRows(
       dayBlockers,
       nowMs,
     );
-    const status = deriveDayStatusInMemory(day, metrics, eodStatus, today);
+    const status = deriveDayStatusInMemory(
+      day,
+      metrics,
+      eodStatus,
+      today,
+      // Mirrors SQL derive_attendance_status: hourly coverage is expected only from
+      // Annotation staff. Before the migration (no work types) keep legacy behaviour.
+      workTypes.schemaReady ? workTypes.map.get(day.user_id) === "annotation" : true,
+    );
 
     // Resolve target parameters from the most frequent task_entry project or active allocation
     let projectTarget: {

@@ -74,6 +74,8 @@ export const listCandidates = createServerFn({ method: "GET" })
     }
 
     const hrUsers = (profiles ?? [])
+      // Protected system-owner accounts never appear in workforce selectors.
+      .filter((p) => !rolesByUser.get(p.id)?.has("super_admin"))
       .filter((p) => {
         const s = rolesByUser.get(p.id);
         return s?.has("hr") || s?.has("super_admin");
@@ -81,6 +83,8 @@ export const listCandidates = createServerFn({ method: "GET" })
       .map((p) => ({ id: p.id, fullName: p.full_name, email: p.work_email }));
 
     const leadAndInterviewerUsers = (profiles ?? [])
+      // Protected system-owner accounts never appear in workforce selectors.
+      .filter((p) => !rolesByUser.get(p.id)?.has("super_admin"))
       .filter((p) => rolesByUser.has(p.id))
       .map((p) => ({
         id: p.id,
@@ -262,6 +266,8 @@ export const getCandidateDetail = createServerFn({ method: "POST" })
     }
 
     const hrUsers = (activeProfiles ?? [])
+      // Protected system-owner accounts never appear in workforce selectors.
+      .filter((p) => !rolesByUser.get(p.id)?.has("super_admin"))
       .filter((p) => {
         const s = rolesByUser.get(p.id);
         return s?.has("hr") || s?.has("super_admin");
@@ -269,6 +275,8 @@ export const getCandidateDetail = createServerFn({ method: "POST" })
       .map((p) => ({ id: p.id, fullName: p.full_name, email: p.work_email }));
 
     const interviewerOptions = (activeProfiles ?? [])
+      // Protected system-owner accounts never appear in workforce selectors.
+      .filter((p) => !rolesByUser.get(p.id)?.has("super_admin"))
       .filter((p) => rolesByUser.has(p.id))
       .map((p) => ({
         id: p.id,

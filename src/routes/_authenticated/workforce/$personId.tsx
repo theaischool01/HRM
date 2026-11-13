@@ -51,8 +51,11 @@ import {
   reviewProfile,
   sendEmployeePasswordResetEmail,
   setEmployeeTemporaryPassword,
+  setEmployeeWorkType,
   updateEmploymentDetails,
 } from "@/lib/workforce.functions";
+import { WorkTypeSection } from "@/components/profile/work-type-section";
+import type { WorkType } from "@/lib/work-type";
 
 export const Route = createFileRoute("/_authenticated/workforce/$personId")({
   head: () => ({
@@ -271,6 +274,22 @@ function PersonProfileContent({
     }
   }
 
+  async function saveWorkType(next: WorkType | null, reason: string) {
+    setBusy(true);
+    try {
+      const res = await setEmployeeWorkType({
+        data: { userId: personId, workType: next, reason: reason.trim() || null },
+      });
+      toast.success(res.unchanged ? "Work type unchanged." : "Work type updated and audited.");
+      await queryClient.invalidateQueries({ queryKey: ["workforce-member", personId] });
+      await queryClient.invalidateQueries({ queryKey: ["workforce"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update the work type.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveRoles() {
     if (selectedRoles.length === 0) {
       toast.error("At least one role is required.");
@@ -368,6 +387,16 @@ function PersonProfileContent({
               missingReportingLead={data.missingReportingLead}
               canLinkProfiles
             />
+
+            {!data.isExecutiveGovernance ? (
+              <WorkTypeSection
+                workType={data.workType}
+                annotation={data.annotation}
+                reportingLeadName={data.reportingLead?.fullName ?? null}
+                busy={busy}
+                onSave={saveWorkType}
+              />
+            ) : null}
 
             <WorkAssignmentsSection
               allocations={data.allocations as never}

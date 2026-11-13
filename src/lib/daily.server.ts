@@ -128,8 +128,13 @@ export const ATTENDANCE_STATUS_LABELS: Record<string, string> = {
   review_required: "Review Required",
 };
 
-/** Pre-submit validation for the EOD report, per the daily-cycle spec. */
+/**
+ * Pre-submit validation for the EOD report, per the daily-cycle spec.
+ * `annotation` mode (default) requires hourly production coverage; `general`
+ * mode (HR, Engineering, Operations, managers…) never demands annotation logs.
+ */
 export function validateEodSubmission(args: {
+  mode?: "annotation" | "general";
   checkedIn: boolean;
   checkedOut: boolean;
   metrics: DayMetrics;
@@ -138,16 +143,18 @@ export function validateEodSubmission(args: {
   tomorrowPlan: string;
   openBlockers: number;
 }): string[] {
+  const mode = args.mode ?? "annotation";
   const problems: string[] = [];
   if (!args.checkedIn) problems.push("You have not checked in today.");
   if (!args.checkedOut) problems.push("Check out before submitting the EOD report.");
   if (args.hasOpenBreak) problems.push("End your open break before submitting.");
-  if (args.metrics.entryCount === 0) problems.push("Log at least one task entry for the day.");
+  if (mode === "annotation" && args.metrics.entryCount === 0)
+    problems.push("Log at least one task entry for the day.");
   if (args.metrics.unsubmittedEntries > 0)
     problems.push(
       `${args.metrics.unsubmittedEntries} task entr${args.metrics.unsubmittedEntries === 1 ? "y is" : "ies are"} still in draft — submit them first.`,
     );
-  if (args.metrics.uncoveredMinutes > 60)
+  if (mode === "annotation" && args.metrics.uncoveredMinutes > 60)
     problems.push(
       `${args.metrics.uncoveredMinutes} minutes of your attended time are not accounted for by entries, breaks or blockers.`,
     );

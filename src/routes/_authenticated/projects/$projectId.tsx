@@ -10,6 +10,12 @@ import { PROJECT_SHIFT_LABELS, optionsOf } from "@/lib/enums";
 import { getProject, updateProject } from "@/lib/projects.functions";
 import { createAllocation, endAllocation, getAllocationLoad } from "@/lib/allocations.functions";
 import { getOrgReference } from "@/lib/workforce.functions";
+import {
+  projectUsesProductionTargets,
+  WORK_TYPE_LABELS,
+  WORK_TYPES,
+  workTypeLabel,
+} from "@/lib/work-type";
 import { todayIso } from "@/lib/timezone";
 import {
   AlertDialog,
@@ -139,6 +145,7 @@ function ProjectDetailPage() {
     requiredHeadcount: data.project.required_headcount?.toString() ?? "1",
     projectLeadId: data.project.project_lead_id ?? "",
     teamLeadIds: data.teamLeads.map((l) => l.id),
+    workType: (data.project.work_type as string | null) ?? "",
   }));
 
   useEffect(() => {
@@ -161,6 +168,7 @@ function ProjectDetailPage() {
       requiredHeadcount: data.project.required_headcount?.toString() ?? "1",
       projectLeadId: data.project.project_lead_id ?? "",
       teamLeadIds: data.teamLeads.map((l) => l.id),
+      workType: (data.project.work_type as string | null) ?? "",
     });
   }, [data.project, data.teamLeads]);
   const [form, setForm] = useState(() => ({
@@ -248,6 +256,7 @@ function ProjectDetailPage() {
   }
 
   async function saveProjectEdits() {
+    const editTargets = !editForm.workType || projectUsesProductionTargets(editForm.workType);
     setBusy(true);
     try {
       await updateProject({
@@ -264,13 +273,14 @@ function ProjectDetailPage() {
           workMode: editForm.workMode,
           shift: editForm.shift || null,
           taskUnit: editForm.taskUnit,
-          hourlyTaskTarget: num(editForm.hourlyTaskTarget),
-          dailyTaskTarget: num(editForm.dailyTaskTarget),
-          qualityTargetPct: num(editForm.qualityTargetPct),
-          maxRejectionRatePct: num(editForm.maxRejectionRatePct),
+          hourlyTaskTarget: editTargets ? num(editForm.hourlyTaskTarget) : null,
+          dailyTaskTarget: editTargets ? num(editForm.dailyTaskTarget) : null,
+          qualityTargetPct: editTargets ? num(editForm.qualityTargetPct) : null,
+          maxRejectionRatePct: editTargets ? num(editForm.maxRejectionRatePct) : null,
           requiredHeadcount: Number(editForm.requiredHeadcount || 1),
           projectLeadId: editForm.projectLeadId || null,
           teamLeadIds: editForm.teamLeadIds,
+          workType: editForm.workType || null,
         },
       });
       toast.success("Project terms and leads updated.");
@@ -325,11 +335,16 @@ function ProjectDetailPage() {
             <Row label="Status" value={project.status.replace("_", " ")} />
             <Row label="Work mode" value={project.work_mode} />
             <Row label="Shift" value={project.shift ?? "—"} />
+            <Row label="Work type" value={workTypeLabel(project.work_type as string | null)} />
             <Row label="Task unit" value={project.task_unit} />
-            <Row label="Hourly target" value={project.hourly_task_target ?? "—"} />
-            <Row label="Daily target" value={project.daily_task_target ?? "—"} />
-            <Row label="Quality target" value={project.quality_target_pct ? `${project.quality_target_pct}%` : "—"} />
-            <Row label="Max rejection" value={project.max_rejection_rate_pct ? `${project.max_rejection_rate_pct}%` : "—"} />
+            {!project.work_type || projectUsesProductionTargets(project.work_type as string) ? (
+              <>
+                <Row label="Hourly target" value={project.hourly_task_target ?? "—"} />
+                <Row label="Daily target" value={project.daily_task_target ?? "—"} />
+                <Row label="Quality target" value={project.quality_target_pct ? `${project.quality_target_pct}%` : "—"} />
+                <Row label="Max rejection" value={project.max_rejection_rate_pct ? `${project.max_rejection_rate_pct}%` : "—"} />
+              </>
+            ) : null}
             <Row label="Headcount" value={`${data.allocations.filter((a) => a.status !== "ended").length}/${project.required_headcount}`} />
             <Row label="Dates" value={`${project.start_date ?? "—"} → ${project.end_date ?? "open"}`} />
             <Row
@@ -392,6 +407,25 @@ function ProjectDetailPage() {
                     onChange={(v) => setEditForm({ ...editForm, endDate: v })}
                   />
                   <div className="space-y-1.5">
+                    <Label htmlFor="edit-proj-worktype" className="text-xs text-muted-foreground">
+                      Work type
+                    </Label>
+                    <select
+                      id="edit-proj-worktype"
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      value={editForm.workType}
+                      onChange={(e) => setEditForm({ ...editForm, workType: e.target.value })}
+                    >
+                      <option value="" disabled={Boolean(project.work_type)}>
+                        Unclassified
+                      </option>
+                      {WORK_TYPES.map((wt) => (
+                        <option key={wt} value={wt}>
+                          {WORK_TYPE_LABELS[wt]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>                  <div className="space-y-1.5">
                     <Label htmlFor="edit-proj-status" className="text-xs text-muted-foreground">
                       Status
                     </Label>
@@ -467,6 +501,8 @@ function ProjectDetailPage() {
                     value={editForm.requiredHeadcount}
                     onChange={(v) => setEditForm({ ...editForm, requiredHeadcount: v })}
                   />
+                  {!editForm.workType || projectUsesProductionTargets(editForm.workType) ? (
+                    <>
                   <LabelledInput
                     label="Hourly target"
                     type="number"
@@ -491,6 +527,8 @@ function ProjectDetailPage() {
                     value={editForm.maxRejectionRatePct}
                     onChange={(v) => setEditForm({ ...editForm, maxRejectionRatePct: v })}
                   />
+                    </>
+                  ) : null}
                   <div className="space-y-1.5">
                     <Label htmlFor="edit-proj-department" className="text-xs text-muted-foreground">
                       Department
@@ -605,7 +643,9 @@ function ProjectDetailPage() {
                         <SelectValue placeholder="Select a person" />
                       </SelectTrigger>
                       <SelectContent>
-                        {reference.people.map((p) => (
+                        {reference.people
+                          .filter((p) => project.work_type !== "annotation" || p.work_type === "annotation")
+                          .map((p) => (
                           <SelectItem key={p.id} value={p.id}>
                             {p.full_name}
                             {p.designation ? ` — ${p.designation}` : ""}
@@ -613,6 +653,11 @@ function ProjectDetailPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {project.work_type === "annotation" ? (
+                      <p className="text-xs text-muted-foreground">
+                        Annotation project — only employees with the Annotation work type are listed.
+                      </p>
+                    ) : null}
                     {load ? (
                       <p className="text-xs text-muted-foreground">
                         Currently allocated {load.usedPct}% across live projects.

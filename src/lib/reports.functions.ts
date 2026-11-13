@@ -9,6 +9,8 @@ import {
   selectProjectsSafe,
 } from "./schema-compat.server";
 import { startOfMonthIso, todayIso } from "./timezone";
+import { excludeProtectedAccounts } from "./work-type";
+import { loadProtectedAccountIds } from "./work-type.server";
 
 /**
  * Exports are permitted for Super Admin, Founder (read-only org-wide oversight),
@@ -71,7 +73,8 @@ export const getReportFilterOptions = createServerFn({ method: "GET" })
       ? projectsRes.rows.filter((pr) => scope.scopedProjectIds.has(pr.id))
       : projectsRes.rows;
 
-    const scopedPeople = (people ?? []).filter((p) =>
+    const protectedIds = await loadProtectedAccountIds(supabase);
+    const scopedPeople = excludeProtectedAccounts(people ?? [], protectedIds).filter((p) =>
       hasAllAttendance ? true : p.id !== userId && Boolean(scope?.scopedUserIds.has(p.id)),
     );
     let scopedDepartments = departments ?? [];

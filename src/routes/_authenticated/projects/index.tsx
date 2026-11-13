@@ -15,6 +15,7 @@ import { errorToAccessScreen } from "@/components/access-denied";
 import { createProject, listProjects } from "@/lib/projects.functions";
 import { describeUnknownError } from "@/lib/describe-error";
 import { getOrgReference } from "@/lib/workforce.functions";
+import { projectUsesProductionTargets, WORK_TYPE_LABELS, WORK_TYPES } from "@/lib/work-type";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -115,6 +116,7 @@ function ProjectsPage() {
     maxRejectionRatePct: "",
     requiredHeadcount: "1",
     status: "active",
+    workType: "",
   });
 
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
@@ -125,6 +127,11 @@ function ProjectsPage() {
       toast.error("The end date cannot be before the start date.");
       return;
     }
+    if (!form.workType) {
+      toast.error("Choose the project work type.");
+      return;
+    }
+    const isAnnotation = projectUsesProductionTargets(form.workType);
     setBusy(true);
     try {
       await createProject({
@@ -141,12 +148,13 @@ function ProjectsPage() {
           workMode: form.workMode,
           shift: form.shift || null,
           taskUnit: form.taskUnit,
-          hourlyTaskTarget: num(form.hourlyTaskTarget),
-          dailyTaskTarget: num(form.dailyTaskTarget),
-          qualityTargetPct: num(form.qualityTargetPct),
-          maxRejectionRatePct: num(form.maxRejectionRatePct),
+          hourlyTaskTarget: isAnnotation ? num(form.hourlyTaskTarget) : null,
+          dailyTaskTarget: isAnnotation ? num(form.dailyTaskTarget) : null,
+          qualityTargetPct: isAnnotation ? num(form.qualityTargetPct) : null,
+          maxRejectionRatePct: isAnnotation ? num(form.maxRejectionRatePct) : null,
           requiredHeadcount: Number(form.requiredHeadcount || 0),
           status: form.status,
+          workType: form.workType,
         },
       });
       toast.success("Project created.");
@@ -195,7 +203,16 @@ function ProjectsPage() {
               <Field label="Client" htmlFor="clientName">
                 <Input id="clientName" value={form.clientName} onChange={(e) => setForm({ ...form, clientName: e.target.value })} />
               </Field>
-              <div className="md:col-span-3">
+              <Field label="Work type" htmlFor="proj-worktype">
+                <Select value={form.workType} onValueChange={(v) => setForm({ ...form, workType: v })}>
+                  <SelectTrigger id="proj-worktype"><SelectValue placeholder="Select work type" /></SelectTrigger>
+                  <SelectContent>
+                    {WORK_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>{WORK_TYPE_LABELS[t]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>              <div className="md:col-span-3">
                 <Field label="Description" htmlFor="description">
                   <Textarea id="description" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </Field>
@@ -266,6 +283,8 @@ function ProjectsPage() {
                   </SelectContent>
                 </Select>
               </Field>
+              {projectUsesProductionTargets(form.workType) ? (
+                <>
               <Field label="Hourly task target" htmlFor="hourlyTaskTarget">
                 <Input id="hourlyTaskTarget" type="number" step="0.01" value={form.hourlyTaskTarget} onChange={(e) => setForm({ ...form, hourlyTaskTarget: e.target.value })} />
               </Field>
@@ -278,6 +297,12 @@ function ProjectsPage() {
               <Field label="Max rejection rate %" htmlFor="maxRejectionRatePct">
                 <Input id="maxRejectionRatePct" type="number" step="0.01" value={form.maxRejectionRatePct} onChange={(e) => setForm({ ...form, maxRejectionRatePct: e.target.value })} />
               </Field>
+                </>
+              ) : form.workType ? (
+                <p className="md:col-span-3 rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
+                  Hourly, daily, quality and rejection targets apply only to Annotation projects. This project is used for management and assignment.
+                </p>
+              ) : null}
               <Field label="Required headcount" htmlFor="requiredHeadcount">
                 <Input id="requiredHeadcount" type="number" value={form.requiredHeadcount} onChange={(e) => setForm({ ...form, requiredHeadcount: e.target.value })} />
               </Field>

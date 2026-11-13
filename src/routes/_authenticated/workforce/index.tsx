@@ -19,6 +19,7 @@ import {
   type AppRole,
   type UserCategory,
 } from "@/lib/permissions";
+import { WORK_TYPE_LABELS, type WorkType } from "@/lib/work-type";
 import { listWorkforce } from "@/lib/workforce.functions";
 
 export const Route = createFileRoute("/_authenticated/workforce/")({
@@ -148,7 +149,7 @@ function WorkforcePage() {
             onChange={(e) => setRoleFilter(e.target.value)}
           >
             <option value="all">All roles</option>
-            {APP_ROLES.map((r) => (
+            {APP_ROLES.filter((r) => r !== "super_admin").map((r) => (
               <option key={r} value={r}>
                 {ROLE_LABELS[r]}
               </option>
@@ -224,6 +225,11 @@ function WorkforcePage() {
                       {person.roles.map((r) => ROLE_LABELS[r as AppRole] ?? r).join(", ") || "—"}
                     </span>
                     <span>{CATEGORY_LABELS[person.category as UserCategory] ?? "—"}</span>
+                    {person.work_type && (
+                      <Badge variant="outline" className="text-[11px]">
+                        {WORK_TYPE_LABELS[person.work_type as WorkType] ?? person.work_type}
+                      </Badge>
+                    )}
                     <span>
                       {person.department_name ?? "Unassigned"}
                       {person.designation ? ` · ${person.designation}` : ""}
@@ -292,6 +298,11 @@ function WorkforcePage() {
                           {person.department_name ?? "Unassigned"}
                         </span>
                         {person.designation ? ` · ${person.designation}` : ""}
+                        {person.work_type && (
+                          <Badge variant="outline" className="ml-2 text-[11px]">
+                            {WORK_TYPE_LABELS[person.work_type as WorkType] ?? person.work_type}
+                          </Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={STATUS_BADGE_VARIANT[status] ?? "outline"}>

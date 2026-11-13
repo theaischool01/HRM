@@ -16,6 +16,12 @@ import { writeAudit } from "./audit.server";
 import { loadActiveOffices } from "./locations.server";
 import { computeTargetAchievement, validateEodSubmission } from "./daily.server";
 import { evalCanReviewOrEscalateSafe } from "./schema-compat.server";
+import { eodModeFor, evaluateAnnotationLogging, requiresAllocationForCheckIn } from "./work-type";
+import {
+  assertCanLogAnnotationWork,
+  loadAnnotationContext,
+  loadProfileWorkTypeAssignment,
+} from "./work-type.server";
 import {
   ENTRY_SELECT,
   loadDay,
@@ -80,6 +86,18 @@ export const getMyDay = createServerFn({ method: "POST" })
     const workDate = data.date ?? todayIso();
     const day = await loadDay(supabase, userId, workDate);
     const allocations = await loadWorkableAllocations(supabase, userId);
+    const annotation = await loadAnnotationContext(supabase, userId, todayIso());
+    const hourlyLogging = {
+      eligible: annotation.logging.eligible,
+      code: annotation.logging.code,
+      reason: annotation.logging.reason,
+      workType: annotation.profile.workType ?? null,
+      eodMode: eodModeFor(annotation.profile),
+      /** Allocation IDs that may receive hourly annotation logs today. */
+      allocationIds: annotation.allocations
+        .filter((a) => evaluateAnnotationLogging(annotation.profile, a, todayIso()).eligible)
+        .map((a) => a.allocationId),
+    };
 
     if (!day) {
       return {
@@ -93,6 +111,7 @@ export const getMyDay = createServerFn({ method: "POST" })
         eod: null,
         allocations,
         achievement: null,
+        hourlyLogging,
       };
     }
 
@@ -152,7 +171,8 @@ export const getMyDay = createServerFn({ method: "POST" })
 
       eod,
       allocations,
-      achievement,
+      achievement: hourlyLogging.eodMode === "annotation" ? achievement : null,
+      hourlyLogging,
     };
   });
 
@@ -168,12 +188,13 @@ export const checkIn = createServerFn({ method: "POST" })
 
     const { loadActor } = await import("./actor.server");
     const actor = await loadActor(supabase, userId);
-    const isManagementRole = actor.roles.some(
-      (r) => r === "manager" || r === "admin" || r === "super_admin" || r === "hr",
-    );
+    const { workType } = await loadProfileWorkTypeAssignment(supabase, userId);
 
+    // Personal attendance is separate from annotation logging: management roles
+    // and staff explicitly classified outside Annotation check in without an
+    // allocation. Annotation / unclassified employees keep the existing gate.
     const allocations = await loadWorkableAllocations(supabase, userId);
-    if (!isManagementRole) {
+    if (requiresAllocationForCheckIn({ roles: actor.roles, workType })) {
       if (allocations.length === 0) {
         throw new Error(
           "You have no active, acknowledged project assignment today, so work logging is closed. Acknowledge your assignment first.",
@@ -363,11 +384,10 @@ export const saveTaskEntry = createServerFn({ method: "POST" })
     if (!allocation)
       throw new Error("That assignment is not active and acknowledged, so you cannot log to it.");
 
-    const { data: canLog } = await supabase.rpc("can_log_work", {
-      _user_id: userId,
-      _project_id: allocation.project_id,
-    });
-    if (canLog !== true) throw new Error("Work logging is blocked for that project.");
+    // One authoritative policy: role = employee, work type = annotation, verified &
+    // active, full-time/intern, active acknowledged allocation on an active
+    // annotation project. RLS + trigger enforce the same rule in the database.
+    await assertCanLogAnnotationWork(supabase, userId, allocation.project_id, todayIso());
 
     const payload = {
       day_id: day.id,
@@ -413,6 +433,20 @@ export const submitTaskEntry = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
+    const { data: existingEntry } = await context.supabase
+      .from("task_entries")
+      .select("project_id")
+      .eq("id", data.id)
+      .eq("user_id", context.userId)
+      .maybeSingle();
+    if (!existingEntry) throw new Error("That entry is not yours or no longer exists.");
+    await assertCanLogAnnotationWork(
+      context.supabase,
+      context.userId,
+      existingEntry.project_id,
+      todayIso(),
+    );
+
     const { data: row, error } = await context.supabase
       .from("task_entries")
       .update({ status: "submitted" })
@@ -709,19 +743,25 @@ export const saveEodReport = createServerFn({ method: "POST" })
 
     const allocations = await loadWorkableAllocations(supabase, userId);
     const primary = allocations[0];
+    const annotationCtx = await loadAnnotationContext(supabase, userId, workDate);
+    const eodMode = eodModeFor(annotationCtx.profile);
 
-    const achievement = computeTargetAchievement({
-      taskMinutes: metrics.taskMinutes,
-      unitsCompleted: metrics.unitsCompleted,
-      unitsApproved:
-        (entries ?? []).reduce((s, e) => s + Number(e.units_approved ?? 0), 0) || null,
-      unitsRejected:
-        (entries ?? []).reduce((s, e) => s + Number(e.units_rejected ?? 0), 0) || null,
-      targets: aggregateAllocationTargets(allocations),
-    });
+    const achievement =
+      eodMode === "annotation"
+        ? computeTargetAchievement({
+            taskMinutes: metrics.taskMinutes,
+            unitsCompleted: metrics.unitsCompleted,
+            unitsApproved:
+              (entries ?? []).reduce((s, e) => s + Number(e.units_approved ?? 0), 0) || null,
+            unitsRejected:
+              (entries ?? []).reduce((s, e) => s + Number(e.units_rejected ?? 0), 0) || null,
+            targets: aggregateAllocationTargets(allocations),
+          })
+        : null;
 
     const problems = data.submit
       ? validateEodSubmission({
+          mode: eodMode,
           checkedIn: Boolean(day.check_in_at),
           checkedOut: Boolean(day.check_out_at),
           metrics,
@@ -733,6 +773,27 @@ export const saveEodReport = createServerFn({ method: "POST" })
       : [];
     if (problems.length > 0) throw new Error(`EOD_INVALID::${JSON.stringify(problems)}`);
 
+    const annotationSummary =
+      eodMode === "annotation"
+        ? {
+            projects: annotationCtx.allocations
+              .filter((a) => a.projectWorkType === "annotation")
+              .map((a) => ({
+                project_id: a.projectId,
+                code: a.projectCode,
+                name: a.projectName,
+                units_submitted: (entries ?? [])
+                  .filter((e) => e.project_id === a.projectId)
+                  .reduce((s, e) => s + Number(e.units_completed ?? 0), 0),
+                daily_target: a.dailyTarget,
+                hourly_target: a.hourlyTarget,
+              })),
+            hours_worked: Math.round((metrics.taskMinutes / 60) * 100) / 100,
+            units_submitted: metrics.unitsCompleted,
+            entries_pending_review: (entries ?? []).length,
+          }
+        : null;
+
     const payload = {
       day_id: day.id,
       user_id: userId,
@@ -741,7 +802,13 @@ export const saveEodReport = createServerFn({ method: "POST" })
       challenges: data.challenges?.trim() || null,
       tomorrow_plan: data.tomorrowPlan?.trim() || null,
       support_needed: data.supportNeeded?.trim() || null,
-      metrics: { ...metrics, achievement, open_blockers: (openBlockers ?? []).length } as never,
+      metrics: {
+        ...metrics,
+        eod_mode: eodMode,
+        achievement,
+        annotation: annotationSummary,
+        open_blockers: (openBlockers ?? []).length,
+      } as never,
       status: (data.submit ? "submitted" : "draft") as "submitted" | "draft",
       submitted_at: data.submit ? new Date().toISOString() : null,
     };
@@ -782,7 +849,10 @@ export const saveEodReport = createServerFn({ method: "POST" })
           actorId: userId,
           type: "eod.submitted",
           title: `${me?.full_name ?? "A team member"} submitted their EOD report`,
-          body: `${metrics.unitsCompleted} units over ${(metrics.taskMinutes / 60).toFixed(2)}h of task time.`,
+          body:
+            eodMode === "annotation"
+              ? `${metrics.unitsCompleted} units over ${(metrics.taskMinutes / 60).toFixed(2)}h of task time.`
+              : "General EOD report submitted.",
           entityType: "eod_report",
           entityId: row.id,
         });

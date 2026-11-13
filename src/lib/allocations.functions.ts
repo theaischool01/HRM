@@ -4,6 +4,13 @@ import { hasPermission, requirePermission } from "./actor.server";
 import { writeAudit } from "./audit.server";
 import { evalCanManageProjectSafe } from "./schema-compat.server";
 import { todayIso } from "./timezone";
+import { evaluateAnnotationAssignable } from "./work-type";
+import {
+  assertCanLogAnnotationWork,
+  isProtectedAccountId,
+  loadProfileWorkTypeAssignment,
+  loadProjectWorkTypes,
+} from "./work-type.server";
 
 async function requireAllocationManage(
   supabase: Parameters<typeof requirePermission>[0],
@@ -85,6 +92,35 @@ export const createAllocation = createServerFn({ method: "POST" })
   })
   .handler(async ({ data, context }) => {
     await requireAllocationManage(context.supabase, context.userId, data.projectId);
+
+    // Protected system-owner accounts are never allocatable.
+    if (await isProtectedAccountId(context.supabase, data.userId)) {
+      throw new Error("That person cannot be allocated to projects.");
+    }
+
+    // Annotation projects accept only authorised annotation employees.
+    const projectTypes = await loadProjectWorkTypes(context.supabase, [data.projectId]);
+    if (projectTypes.map.get(data.projectId) === "annotation") {
+      const [{ data: target }, { data: targetRoles }, targetType] = await Promise.all([
+        context.supabase
+          .from("profiles")
+          .select("account_status, employment_status, category")
+          .eq("id", data.userId)
+          .maybeSingle(),
+        context.supabase.from("user_roles").select("role").eq("user_id", data.userId),
+        loadProfileWorkTypeAssignment(context.supabase, data.userId),
+      ]);
+      const verdict = evaluateAnnotationAssignable({
+        roles: (targetRoles ?? []).map((r) => r.role),
+        workType: targetType.workType,
+        accountStatus: target?.account_status ?? null,
+        employmentStatus: target?.employment_status ?? null,
+        category: target?.category ?? null,
+      });
+      if (!verdict.eligible) {
+        throw new Error(`This person cannot be allocated to an annotation project: ${verdict.reason}`);
+      }
+    }
 
     const pct = data.allocationPct ?? 100;
     const { data: used, error: loadError } = await context.supabase.rpc("allocation_pct_used", {
@@ -259,5 +295,11 @@ export const canLogWork = createServerFn({ method: "POST" })
       _project_id: data.projectId,
     });
     if (error) throw error;
-    return { allowed: allowed === true };
+    if (allowed !== true) return { allowed: false };
+    try {
+      await assertCanLogAnnotationWork(context.supabase, context.userId, data.projectId, todayIso());
+      return { allowed: true };
+    } catch {
+      return { allowed: false };
+    }
   });

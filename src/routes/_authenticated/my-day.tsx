@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { DAY_SLOTS, slotKeyOf, slotRange, type DaySlot } from "@/lib/slots";
 import { readBrowserPosition, requiresLocation } from "@/lib/geo";
+import { requiresAllocationForCheckIn } from "@/lib/work-type";
 import { AppShell } from "@/components/app-shell";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
@@ -230,6 +231,10 @@ function MyDayPage() {
   const checkedIn = Boolean(day.day?.check_in_at);
   const checkedOut = Boolean(day.day?.check_out_at);
   const allocations = day.allocations;
+  const hourly = day.hourlyLogging;
+  const canLogHourly = hourly.eligible;
+  /** Personal attendance never depends on annotation assignment for non-annotation staff. */
+  const checkInFree = !requiresAllocationForCheckIn({ roles: actor.roles, workType: hourly.workType });
   const deviceInfo = () => ({
     user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null,
     platform: typeof navigator !== "undefined" ? navigator.platform : null,
@@ -386,13 +391,13 @@ function MyDayPage() {
               <AlarmClock className="size-4" /> Attendance
             </CardTitle>
             <CardDescription>
-              {isManagementRole
+              {checkInFree
                 ? "Personal workday attendance and break tracking."
                 : "Check-in is only open for assignments you have acknowledged."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {allocations.length === 0 && !isManagementRole && (
+            {allocations.length === 0 && !checkInFree && (
               <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                 No active, acknowledged assignment today — work logging is closed. Acknowledge an
                 assignment on{" "}
@@ -402,9 +407,9 @@ function MyDayPage() {
                 to unlock check-in.
               </p>
             )}
-            {allocations.length === 0 && isManagementRole && (
+            {allocations.length === 0 && checkInFree && (
               <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Manager Attendance Mode:</span> Personal
+                <span className="font-medium text-foreground">Personal Attendance Mode:</span> Personal
                 presence tracking. Project task targets are not required for personal check-in.
               </div>
             )}
@@ -446,7 +451,7 @@ function MyDayPage() {
                 </div>
                 <Button
                   className="w-full"
-                  disabled={busy === "check-in" || (allocations.length === 0 && !isManagementRole)}
+                  disabled={busy === "check-in" || (allocations.length === 0 && !checkInFree)}
                   onClick={doCheckIn}
                 >
                   <LogIn className="size-4" /> Check in
@@ -513,24 +518,27 @@ function MyDayPage() {
 
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">Hourly task entries</CardTitle>
+            <CardTitle className="text-base">Hourly annotation logs</CardTitle>
             <CardDescription>
-              {isManagementRole && allocations.length === 0
-                ? "Hourly task logging is tied to client project allocations. Use the Manager Dashboard and Oversight to manage team deliverables."
+              {!canLogHourly
+                ? "Hourly production logging is limited to Annotation employees with an active, acknowledged annotation project allocation."
                 : "One row per hour of the working day (9:00–6:00). Fill the slots you worked; breaks and blockers are logged separately. Approved slots lock."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            {allocations.length === 0 && isManagementRole ? (
+            {!canLogHourly ? (
               <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">No Project Task Logging Required</p>
+                <p className="font-medium text-foreground">
+                  {hourly.workType === "annotation" || hourly.workType == null
+                    ? "Hourly annotation logging unavailable"
+                    : "No hourly annotation logging for your role"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">{hourly.reason}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  You are not allocated to client task units. Your attendance and breaks are tracked above.
-                  Use the Manager Dashboard and Oversight to manage team deliverables and projects.
+                  Your attendance and breaks are tracked above, and your end-of-day report is below.
                 </p>
               </div>
-            ) : (
-            <div className="overflow-hidden rounded-lg border">
+            ) : (            <div className="overflow-hidden rounded-lg border">
               <div className="hidden grid-cols-[7.5rem_5.5rem_5.5rem_1fr_auto] gap-2 border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground sm:grid">
                 <span>Time slot</span>
                 <span>Assigned</span>
@@ -708,6 +716,7 @@ function MyDayPage() {
             </div>
             )}
 
+            {canLogHourly && (
             <div className="rounded-lg border">
               <button
                 type="button"
@@ -850,7 +859,9 @@ function MyDayPage() {
                 </div>
               )}
             </div>
+            )}
 
+            {(canLogHourly || day.entries.length > 0) && (
             <div className="space-y-2">
               {day.entries.length === 0 && (
                 <p className="text-sm text-muted-foreground">No entries logged yet today.</p>
@@ -905,6 +916,7 @@ function MyDayPage() {
                 );
               })}
             </div>
+            )}
 
             {achievement && (
               <div className="grid gap-3 rounded-lg border bg-muted/40 p-3 text-sm sm:grid-cols-4">

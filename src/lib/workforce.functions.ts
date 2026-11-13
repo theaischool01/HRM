@@ -13,6 +13,21 @@ import {
   resolveSupervisorScope,
   selectDepartmentManagersSafe,
 } from "./schema-compat.server";
+import {
+  canChangeWorkTypeFor,
+  excludeProtectedAccounts,
+  isWorkType,
+  WORK_TYPE_LABELS,
+  type WorkType,
+} from "./work-type";
+import {
+  isProtectedAccountId,
+  loadAnnotationContext,
+  loadProfileWorkTypeAssignment,
+  loadProfileWorkTypes,
+  loadProtectedAccountIds,
+} from "./work-type.server";
+import { todayIso } from "./timezone";
 
 
 const PROFILE_SELECT =
@@ -36,24 +51,31 @@ export type ProfileDraft = {
   photoUrl?: string | null;
 };
 
-/** Reference data used by every form in the portal. */
+/** Reference data used by every form in the portal. Protected accounts never appear in selectors. */
 export const getOrgReference = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const [{ data: departments }, { data: leads }, deptMgrRes] = await Promise.all([
-      context.supabase.from("departments").select("id, name, code, description").order("name"),
-      context.supabase
-        .from("profiles")
-        .select("id, full_name, designation")
-        .eq("employment_status", "active")
-        .order("full_name"),
-      selectDepartmentManagersSafe(context.supabase),
-    ]);
+    const [{ data: departments }, { data: leads }, deptMgrRes, protectedIds, workTypes] =
+      await Promise.all([
+        context.supabase.from("departments").select("id, name, code, description").order("name"),
+        context.supabase
+          .from("profiles")
+          .select("id, full_name, designation")
+          .eq("employment_status", "active")
+          .order("full_name"),
+        selectDepartmentManagersSafe(context.supabase),
+        loadProtectedAccountIds(context.supabase),
+        loadProfileWorkTypes(context.supabase),
+      ]);
     return {
       departments: departments ?? [],
-      people: leads ?? [],
-      departmentManagers: deptMgrRes.rows,
+      people: excludeProtectedAccounts(leads ?? [], protectedIds).map((p) => ({
+        ...p,
+        work_type: workTypes.map.get(p.id) ?? null,
+      })),
+      departmentManagers: deptMgrRes.rows.filter((dm) => !protectedIds.has(dm.manager_id)),
       departmentManagersReady: deptMgrRes.tableExists,
+      workTypeSchemaReady: workTypes.schemaReady,
     };
   });
 
@@ -149,7 +171,7 @@ export const listWorkforce = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const actor = await loadActor(context.supabase, context.userId);
-    const [{ data: rawProfiles, error }, { data: roles }, { data: departments }, scope] =
+    const [{ data: rawProfiles, error }, { data: roles }, { data: departments }, scope, protectedIds, workTypes] =
       await Promise.all([
         context.supabase.from("profiles").select(PROFILE_SELECT).order("full_name"),
         context.supabase.from("user_roles").select("user_id, role"),
@@ -157,12 +179,17 @@ export const listWorkforce = createServerFn({ method: "GET" })
         actor.permissions.includes("workforce:read:all")
           ? Promise.resolve(null)
           : resolveSupervisorScope(context.supabase, context.userId, actor.roles),
+        loadProtectedAccountIds(context.supabase),
+        loadProfileWorkTypes(context.supabase),
       ]);
     if (error) throw error;
 
-    const profiles = scope
+    // Protected system-owner accounts are never part of the Workforce Directory —
+    // not even for a Super Admin viewer (their own record lives under My Profile).
+    const scopedProfiles = scope
       ? (rawProfiles ?? []).filter((p) => scope.scopedUserIds.has(p.id))
       : (rawProfiles ?? []);
+    const profiles = excludeProtectedAccounts(scopedProfiles, protectedIds);
 
     const deptMap = new Map((departments ?? []).map((d) => [d.id, d.name]));
     const roleMap = new Map<string, string[]>();
@@ -182,6 +209,7 @@ export const listWorkforce = createServerFn({ method: "GET" })
         current_address: allowSensitivePii || isSelf ? profile.current_address : null,
         permanent_address: allowSensitivePii || isSelf ? profile.permanent_address : null,
         department_name: profile.department_id ? (deptMap.get(profile.department_id) ?? null) : null,
+        work_type: workTypes.map.get(profile.id) ?? null,
         roles: personRoles,
         missingReportingLead: needsReportingLead({
           roles: personRoles,
@@ -213,6 +241,16 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
       if (!scope.scopedUserIds.has(data.id)) {
         throw new Error("This person is outside your assigned department or team scope.");
       }
+    }
+
+    // Protected system-owner profiles are not reachable by URL / predictable ID.
+    // Same generic message as "not found" so the ID cannot be probed.
+    if (
+      data.id !== context.userId &&
+      !actor.roles.includes("super_admin") &&
+      (await isProtectedAccountId(context.supabase, data.id))
+    ) {
+      throw new Error("This person is not visible to you.");
     }
 
     const [
@@ -312,6 +350,19 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
 
     const targetRoles = (roles ?? []).map((r) => r.role);
 
+    const [workTypeAssignment, annotation] = await Promise.all([
+      loadProfileWorkTypeAssignment(context.supabase, data.id),
+      loadAnnotationContext(context.supabase, data.id, todayIso()),
+    ]);
+    let workTypeAssignedByName: string | null = null;
+    if (workTypeAssignment.assignedBy) {
+      const names = await loadProfileNames(context.supabase, [workTypeAssignment.assignedBy]);
+      workTypeAssignedByName = names.get(workTypeAssignment.assignedBy)?.fullName ?? null;
+    }
+    const annotationAllocations = annotation.allocations.filter(
+      (a) => a.projectWorkType === "annotation",
+    );
+
     return {
       profile,
       roles: targetRoles,
@@ -322,7 +373,36 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
       reportingLead,
       managedDepartments,
       directReportsCount: (directReports ?? []).length,
-      allocations: allocations ?? [],
+      allocations: (allocations ?? []).map((a) => ({
+        ...a,
+        project_work_type:
+          annotation.allocations.find((x) => x.allocationId === a.id)?.projectWorkType ?? null,
+      })),
+      workType: {
+        value: workTypeAssignment.workType,
+        assignedAt: workTypeAssignment.assignedAt,
+        assignedByName: workTypeAssignedByName,
+        schemaReady: workTypeAssignment.schemaReady,
+        canEdit: canChangeWorkTypeFor(context.userId, actor.roles, data.id),
+      },
+      annotation:
+        workTypeAssignment.workType === "annotation"
+          ? {
+              contributor: annotation.contributor,
+              logging: annotation.logging,
+              allocations: annotationAllocations.map((a) => ({
+                allocationId: a.allocationId,
+                projectId: a.projectId,
+                projectCode: a.projectCode,
+                projectName: a.projectName,
+                status: a.status,
+                acknowledgedAt: a.acknowledgedAt,
+                hourlyTarget: a.hourlyTarget,
+                dailyTarget: a.dailyTarget,
+                taskUnit: a.taskUnit,
+              })),
+            }
+          : null,
       isExecutiveGovernance: isExecutiveGovernanceOnly(targetRoles),
       missingReportingLead: needsReportingLead({
         roles: targetRoles,
@@ -511,6 +591,15 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "workforce:update:all");
 
+    const actorForEdit = await loadActor(supabase, userId);
+    if (
+      data.userId !== userId &&
+      !actorForEdit.roles.includes("super_admin") &&
+      (await isProtectedAccountId(supabase, data.userId))
+    ) {
+      throw new Error("This person is not visible to you.");
+    }
+
     const patch: Record<string, unknown> = {};
     if (data.designation !== undefined) patch["designation"] = data.designation || null;
     if (data.departmentId !== undefined) patch["department_id"] = data.departmentId || null;
@@ -546,6 +635,76 @@ export const updateEmploymentDetails = createServerFn({ method: "POST" })
       detail: patch,
     });
     return { ok: true };
+  });
+
+/**
+ * HR / Admin / Super Admin action: assign an employee's Work Type (workstream).
+ * Separate from role, category and employment status; audited with old -> new.
+ * The DB trigger `guard_profile_work_type` enforces the same rule independently.
+ */
+export const setEmployeeWorkType = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { userId: string; workType: string | null; reason?: string | null }) => {
+    if (!input?.userId) throw new Error("A person id is required.");
+    if (input.workType !== null && !isWorkType(input.workType)) {
+      throw new Error("Choose a valid work type.");
+    }
+    return {
+      userId: input.userId,
+      workType: input.workType as WorkType | null,
+      reason: input.reason?.trim() || null,
+    };
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const actor = await loadActor(supabase, userId);
+    if (!canChangeWorkTypeFor(userId, actor.roles, data.userId)) {
+      throw new Error(
+        data.userId === userId
+          ? "You cannot assign your own work type."
+          : "Only HR, Admin or Super Admin can change an employee's work type.",
+      );
+    }
+    if (
+      data.userId !== userId &&
+      !actor.roles.includes("super_admin") &&
+      (await isProtectedAccountId(supabase, data.userId))
+    ) {
+      throw new Error("This person is not visible to you.");
+    }
+
+    const before = await loadProfileWorkTypeAssignment(supabase, data.userId);
+    if (!before.schemaReady) {
+      throw new Error(
+        "Work Type requires applying SQL migration 20261113000000_annotation_work_type_and_protected_accounts.sql.",
+      );
+    }
+    if (before.workType === data.workType) {
+      return { ok: true, unchanged: true, workType: data.workType };
+    }
+
+    const { error } = await (supabase as unknown as import("@supabase/supabase-js").SupabaseClient)
+      .from("profiles")
+      .update({ work_type: data.workType })
+      .eq("id", data.userId);
+    if (error) rethrowDbError("Updating the work type failed", error);
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "profile.work_type_changed",
+      entityType: "profile",
+      entityId: data.userId,
+      detail: {
+        from: before.workType,
+        to: data.workType,
+        from_label: before.workType ? WORK_TYPE_LABELS[before.workType] : "Unclassified",
+        to_label: data.workType ? WORK_TYPE_LABELS[data.workType] : "Unclassified",
+        reason: data.reason,
+      },
+    });
+
+    return { ok: true, unchanged: false, workType: data.workType };
   });
 
 export const upsertDepartment = createServerFn({ method: "POST" })
@@ -691,6 +850,15 @@ export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "workforce:update:all");
+
+    const resetActor = await loadActor(supabase, userId);
+    if (
+      data.userId !== userId &&
+      !resetActor.roles.includes("super_admin") &&
+      (await isProtectedAccountId(supabase, data.userId))
+    ) {
+      throw new Error("Could not find employee profile or email.");
+    }
 
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
