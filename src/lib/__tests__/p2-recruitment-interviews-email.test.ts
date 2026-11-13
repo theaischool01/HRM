@@ -524,7 +524,8 @@ describe("Phase P2 — HR Email Template Center (15 Templates, Variables & XSS S
       });
       expect(rendered.ok).toBe(true);
       expect(rendered.missingVariables).toEqual([]);
-      expect(rendered.bodyHtml).toContain("THE <span style=\"color:#e11d48;\">AI SCHOOL</span>");
+      expect(rendered.bodyHtml).toContain("/the-ai-school-logo.png");
+      expect(rendered.bodyHtml).toContain('alt="The AI School"');
     }
 
     // Confirm all 9 core prompt variables are supported

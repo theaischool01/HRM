@@ -190,8 +190,7 @@ export function renderWelcomeEmailHtml(params: WelcomeEmailParams): string {
   <div class="wrapper">
     <div class="container">
       <div class="header">
-        <img src="${escapeHtml(portalUrl.replace(/\/+$/, ""))}/the-ai-school-logo.png" alt="The AI School" height="30" style="display:block;height:30px;width:auto;margin:0 auto 10px auto;border:0;" />
-        <h1 class="brand-title">THE <span>AI SCHOOL</span></h1>
+        <img src="/the-ai-school-logo.png" alt="The AI School" height="32" style="display:block;height:32px;width:auto;margin:0 auto;border:0;" />
         <div class="brand-bar"></div>
       </div>
       <div class="content">

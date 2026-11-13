@@ -1,8 +1,56 @@
 // Server-only Email Delivery Transport (Hostinger SMTP via Nodemailer).
 // NEVER import this module from client components — only inside server functions.
 
+import fs from "node:fs";
+import path from "node:path";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
+
+const BRAND_LOGO_CID = "the-ai-school-logo@theaischool.co";
+const BRAND_LOGO_URL_RE = /(?:https?:\/\/[^"'\s)]+)?\/the-ai-school-logo\.png/gi;
+
+/**
+ * Hydrates server environment variables from `.env` on disk when the running
+ * SSR dev server process hasn't loaded non-`VITE_` keys (or was already running
+ * before `.env` was edited). Production/Vercel process.env values always win,
+ * and automated Vitest runs are left untouched so tests remain isolated.
+ */
+export function getRuntimeServerEnv(): Record<string, string | undefined> {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  const isVitest = baseEnv["VITEST"] === "true" || baseEnv["NODE_ENV"] === "test";
+  if (isVitest) {
+    return baseEnv;
+  }
+
+  try {
+    const envPath = path.resolve(process.cwd(), ".env");
+    if (!fs.existsSync(envPath)) {
+      return baseEnv;
+    }
+    const raw = fs.readFileSync(envPath, "utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx <= 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      if (!String(baseEnv[key] ?? "").trim() && val) {
+        baseEnv[key] = val;
+      }
+    }
+  } catch {
+    // Keep base process.env if `.env` is inaccessible
+  }
+
+  return baseEnv;
+}
 
 export type EmailDeliveryStatus =
   | "draft"
@@ -131,7 +179,7 @@ function parsePositiveInt(
  */
 export function resolveSupabaseAuthRedirectUrl(
   path: "/auth/reset-password" | "/auth/callback",
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = getRuntimeServerEnv(),
 ): string {
   const rawBase = (
     env["SITE_URL"] ||
@@ -160,7 +208,7 @@ export function resolveSupabaseAuthRedirectUrl(
  * ever returning, serializing, or logging `SMTP_PASS`.
  */
 export function inspectEmailProviderConfig(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = getRuntimeServerEnv(),
 ): EmailProviderStatusReport {
   const issues: string[] = [];
 
@@ -501,7 +549,7 @@ export async function verifySmtpConnection(
   senderDisplay: string | null;
   message: string;
 }> {
-  const env = options?.env ?? process.env;
+  const env = options?.env ?? getRuntimeServerEnv();
   const config = inspectEmailProviderConfig(env);
 
   if (!config.configured || !config.senderDisplay || !config.smtpHost || !config.smtpPort) {
@@ -568,7 +616,7 @@ export async function verifySmtpConnection(
 export function createHostingerSmtpTransport(
   options?: HostingerTransportOptions,
 ): EmailTransport {
-  const env = options?.env ?? process.env;
+  const env = options?.env ?? getRuntimeServerEnv();
 
   return {
     async send(payload: SendEmailPayload): Promise<SendEmailTransportResult> {
@@ -643,6 +691,23 @@ export function createHostingerSmtpTransport(
       const baseDelayMs = options?.retryBaseDelayMs ?? 1000;
       const cleanSubject = sanitizeEmailHeaderValue(payload.subject);
 
+      let outgoingHtml = payload.html;
+      let inlineAttachments: Mail.Attachment[] | undefined;
+      if (!options?.transporterFactory && /the-ai-school-logo\.png/i.test(payload.html)) {
+        const logoDiskPath = path.resolve(process.cwd(), "public", "the-ai-school-logo.png");
+        if (fs.existsSync(logoDiskPath)) {
+          outgoingHtml = payload.html.replace(BRAND_LOGO_URL_RE, `cid:${BRAND_LOGO_CID}`);
+          inlineAttachments = [
+            {
+              filename: "the-ai-school-logo.png",
+              path: logoDiskPath,
+              cid: BRAND_LOGO_CID,
+              contentDisposition: "inline",
+            },
+          ];
+        }
+      }
+
       let lastErrorMessage = "SMTP delivery failed.";
       let attemptsUsed = 0;
 
@@ -655,8 +720,9 @@ export function createHostingerSmtpTransport(
               to: recipientCheck.normalized,
               ...(resolvedReplyTo ? { replyTo: resolvedReplyTo } : {}),
               subject: cleanSubject,
-              html: payload.html,
+              html: outgoingHtml,
               ...(payload.text ? { text: payload.text } : {}),
+              ...(inlineAttachments ? { attachments: inlineAttachments } : {}),
               headers: {
                 "X-Entity-Ref-ID": sanitizeEmailHeaderValue(payload.idempotencyKey).slice(0, 128),
               },

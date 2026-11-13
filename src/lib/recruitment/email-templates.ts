@@ -349,12 +349,9 @@ export function stripHtmlToText(html: string): string {
 export function wrapBrandedEmailHtml(
   subject: string,
   innerHtml: string,
-  options?: { portalUrl?: string | undefined },
+  options?: { portalUrl?: string | undefined; logoUrl?: string | undefined },
 ): string {
-  const basePortalUrl = (
-    options?.portalUrl?.trim() || "https://hrm.theaischool.co"
-  ).replace(/\/+$/, "");
-  const logoSrc = `${basePortalUrl}/the-ai-school-logo.png`;
+  const logoSrc = options?.logoUrl?.trim() || "/the-ai-school-logo.png";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -370,8 +367,7 @@ export function wrapBrandedEmailHtml(
         <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
           <tr>
             <td style="vertical-align:middle;">
-              <img src="${escapeHtml(logoSrc)}" alt="The AI School" height="28" style="display:inline-block;height:28px;width:auto;vertical-align:middle;margin-right:10px;border:0;" />
-              <strong style="font-size:18px;letter-spacing:-0.3px;color:#09090b;vertical-align:middle;">THE <span style="color:#e11d48;">AI SCHOOL</span></strong>
+              <img src="${escapeHtml(logoSrc)}" alt="The AI School" height="28" style="display:block;height:28px;width:auto;border:0;" />
             </td>
             <td style="vertical-align:middle;text-align:right;font-size:11px;color:#52525b;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">
               HR &amp; Talent

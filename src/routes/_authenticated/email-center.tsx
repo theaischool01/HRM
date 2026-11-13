@@ -774,7 +774,7 @@ function EmailCenterPage() {
                     <div className={previewMode === "mobile" ? "mx-auto max-w-[375px]" : ""}>
                       <iframe
                         title="Branded HR Email Preview"
-                        sandbox=""
+                        sandbox="allow-same-origin"
                         srcDoc={editorPreview.bodyHtml}
                         className="h-80 w-full rounded-md border border-border bg-zinc-100"
                       />
@@ -1150,7 +1150,7 @@ function EmailCenterPage() {
                   <div className={previewMode === "mobile" ? "mx-auto max-w-[375px]" : ""}>
                     <iframe
                       title="Compose Email Preview"
-                      sandbox=""
+                      sandbox="allow-same-origin"
                       srcDoc={composePreview.bodyHtml}
                       className="h-[460px] w-full rounded-md border border-border bg-zinc-100"
                     />
