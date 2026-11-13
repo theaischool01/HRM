@@ -2,7 +2,7 @@ import { renderWelcomeEmailHtml } from "./welcome-email";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { CATEGORY_LABELS, ROLE_LABELS, type AppRole, type UserCategory } from "@/lib/permissions";
 import {
-  createResendEmailTransport,
+  createHostingerSmtpTransport,
   inspectEmailProviderConfig,
 } from "@/lib/recruitment/email-transport.server";
 
@@ -48,7 +48,7 @@ export async function sendWelcomeEmailForProvisionedUser(params: {
       portalUrl,
     });
 
-    const transport = createResendEmailTransport();
+    const transport = createHostingerSmtpTransport();
     const dispatchResult = await transport.send({
       to: params.workEmail,
       subject: `Welcome to The AI School — Employee ID ${params.employeeCode}`,

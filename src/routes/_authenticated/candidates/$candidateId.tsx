@@ -433,7 +433,7 @@ function CandidateDetailPage() {
           },
         },
       });
-      toast.success("Email sent via verified Resend transport.");
+      toast.success("Email accepted by Hostinger SMTP.");
       setEmailOpen(false);
       await refreshAll();
     } catch (error) {
@@ -1371,7 +1371,7 @@ function CandidateDetailPage() {
             {!detail.emailProvider.configured && (
               <div className="rounded-md border border-warning/50 bg-warning/10 p-3 text-xs text-warning">
                 Email provider not yet configured ({detail.emailProvider.issues.join(" ")}).
-                Configure verified Resend credentials to enable live sending, or compose a draft in{" "}
+                Configure Hostinger SMTP credentials to enable live sending, or compose a draft in{" "}
                 <Link to="/email-center" className="underline">
                   Email Center
                 </Link>

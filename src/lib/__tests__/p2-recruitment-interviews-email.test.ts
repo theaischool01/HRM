@@ -23,7 +23,7 @@ import {
   validateTemplateVariables,
 } from "../recruitment/email-templates";
 import {
-  createResendEmailTransport,
+  createHostingerSmtpTransport,
   inspectEmailProviderConfig,
   resolveStatusFromProviderEvent,
 } from "../recruitment/email-transport.server";
@@ -485,8 +485,8 @@ describe("Phase P2 — 7-Role Recruitment, Interview & Email Permissions + Navig
   });
 });
 
-describe("Phase P2 — HR Email Template Center (12 Templates, Variables & XSS Safety)", () => {
-  it("provides all 12 required standard HR templates with valid supported variables", () => {
+describe("Phase P2 — HR Email Template Center (15 Templates, Variables & XSS Safety)", () => {
+  it("provides all 15 required standard HR recruitment & communication templates with valid supported variables", () => {
     const expectedSlugs = [
       "application_received",
       "candidate_shortlisted",
@@ -500,6 +500,9 @@ describe("Phase P2 — HR Email Template Center (12 Templates, Variables & XSS S
       "onboarding_invitation",
       "document_reminder",
       "employee_welcome",
+      "document_correction_request",
+      "hr_announcement",
+      "work_notice",
     ];
 
     expect(DEFAULT_EMAIL_TEMPLATES.map((t) => t.slug)).toEqual(expectedSlugs);
@@ -579,37 +582,50 @@ describe("Phase P2 — HR Email Template Center (12 Templates, Variables & XSS S
   });
 });
 
-describe("Phase P2 — Email Provider Readiness, Honest Delivery Status & Zero Live Emails in Tests", () => {
-  it("verifies sender configuration strictly and never exposes secret API keys", () => {
+describe("Phase P2 — Hostinger SMTP Readiness, Honest Delivery Status & Zero Live Emails in Tests", () => {
+  it("verifies sender configuration strictly and never exposes SMTP password", () => {
     expect(inspectEmailProviderConfig({}).configured).toBe(false);
 
-    // Rejects placeholder keys and Resend sandbox sender domain
-    const sandboxCfg = inspectEmailProviderConfig({
-      RESEND_API_KEY: "re_live_1234567890abcdef",
-      RESEND_FROM_EMAIL: "onboarding@resend.dev",
+    // Rejects Titan/Resend providers and personal Gmail logins
+    const badCfg = inspectEmailProviderConfig({
+      SMTP_HOST: "smtp.titan.email",
+      SMTP_PORT: "465",
+      SMTP_SECURE: "true",
+      SMTP_USER: "manaswini@gmail.com",
+      SMTP_PASS: "SuperSecretMailboxPass123",
+      EMAIL_FROM: "manaswini@gmail.com",
     });
-    expect(sandboxCfg.configured).toBe(false);
-    expect(JSON.stringify(sandboxCfg)).not.toContain("re_live_1234567890abcdef");
+    expect(badCfg.configured).toBe(false);
+    expect(JSON.stringify(badCfg)).not.toContain("SuperSecretMailboxPass123");
 
-    // Accepts valid key + verified org sender domain
+    // Accepts valid Hostinger SMTP config
     const validCfg = inspectEmailProviderConfig({
-      RESEND_API_KEY: "re_live_1234567890abcdef",
-      RESEND_FROM_EMAIL: "The AI School HR <hr@theaischool.in>",
+      SMTP_HOST: "smtp.hostinger.com",
+      SMTP_PORT: "465",
+      SMTP_SECURE: "true",
+      SMTP_USER: "hr@theaischool.co",
+      SMTP_PASS: "SuperSecretMailboxPass123",
+      EMAIL_FROM: "hr@theaischool.co",
+      EMAIL_FROM_NAME: "The AI School HR",
     });
     expect(validCfg.configured).toBe(true);
-    expect(validCfg.senderDisplay).toBe("The AI School HR <hr@theaischool.in>");
-    expect(JSON.stringify(validCfg)).not.toContain("re_live_1234567890abcdef");
+    expect(validCfg.senderDisplay).toBe("The AI School HR <hr@theaischool.co>");
+    expect(JSON.stringify(validCfg)).not.toContain("SuperSecretMailboxPass123");
   });
 
-  it("blocks live email dispatches automatically in Vitest unless explicit mock transport is injected", async () => {
-    const spyFetch = vi.fn();
-    const transport = createResendEmailTransport({
+  it("blocks live email dispatches automatically in Vitest unless explicit mock transporter is injected", async () => {
+    const sendMailSpy = vi.fn();
+    const transport = createHostingerSmtpTransport({
       env: {
         VITEST: "true",
-        RESEND_API_KEY: "re_live_1234567890abcdef",
-        RESEND_FROM_EMAIL: "The AI School HR <hr@theaischool.in>",
+        SMTP_HOST: "smtp.hostinger.com",
+        SMTP_PORT: "465",
+        SMTP_SECURE: "true",
+        SMTP_USER: "hr@theaischool.co",
+        SMTP_PASS: "SuperSecretMailboxPass123",
+        EMAIL_FROM: "hr@theaischool.co",
       },
-      fetchImpl: spyFetch as unknown as typeof fetch,
+      transporterFactory: () => ({ sendMail: sendMailSpy }),
     });
 
     const blocked = await transport.send({
@@ -621,23 +637,27 @@ describe("Phase P2 — Email Provider Readiness, Honest Delivery Status & Zero L
 
     expect(blocked.ok).toBe(false);
     expect(blocked.status).toBe("failed");
-    expect(spyFetch).not.toHaveBeenCalled();
+    expect(sendMailSpy).not.toHaveBeenCalled();
   });
 
-  it("records synchronous provider acceptance as 'sent' (NEVER 'delivered') and promotes to 'delivered' only on provider webhook event", async () => {
-    const mockFetchOk = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: async () => ({ id: "msg_resend_998877" }),
+  it("records synchronous SMTP 250 acceptance as 'accepted_by_smtp' (NEVER 'delivered')", async () => {
+    const mockSendMailOk = vi.fn().mockResolvedValue({
+      messageId: "<smtp-msg-998877@theaischool.co>",
+      response: "250 2.0.0 Ok: queued as 998877",
+      accepted: ["candidate@example.com"],
+      rejected: [],
     });
 
-    const transport = createResendEmailTransport({
+    const transport = createHostingerSmtpTransport({
       env: {
-        RESEND_API_KEY: "re_test_mock_key_123456",
-        RESEND_FROM_EMAIL: "The AI School HR <hr@theaischool.in>",
+        SMTP_HOST: "smtp.hostinger.com",
+        SMTP_PORT: "465",
+        SMTP_SECURE: "true",
+        SMTP_USER: "hr@theaischool.co",
+        SMTP_PASS: "MockSecretPass999",
+        EMAIL_FROM: "hr@theaischool.co",
       },
-      fetchImpl: mockFetchOk as unknown as typeof fetch,
+      transporterFactory: () => ({ sendMail: mockSendMailOk }),
       allowInTests: true,
     });
 
@@ -649,30 +669,37 @@ describe("Phase P2 — Email Provider Readiness, Honest Delivery Status & Zero L
       idempotencyKey: "idem-iv-1",
     });
 
-    expect(mockFetchOk).toHaveBeenCalledTimes(1);
+    expect(mockSendMailOk).toHaveBeenCalledTimes(1);
     expect(sentRes).toEqual({
       ok: true,
-      status: "sent",
-      provider: "resend",
-      providerMessageId: "msg_resend_998877",
+      status: "accepted_by_smtp",
+      provider: "hostinger_smtp",
+      providerMessageId: "<smtp-msg-998877@theaischool.co>",
+      smtpResponse: "250 2.0.0 Ok: queued as 998877",
+      attemptsUsed: 1,
     });
-    // Explicitly prove synchronous API acceptance is NEVER "delivered"
+    // Explicitly prove synchronous SMTP acceptance is NEVER "delivered"
     expect(sentRes.status).not.toBe("delivered");
 
-    // Provider error handling -> honest "failed" status
-    const mockFetchFail = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 422,
-      statusText: "Unprocessable Entity",
-      json: async () => ({ message: "Domain theaischool.in is not verified" }),
-    });
-    const failingTransport = createResendEmailTransport({
+    // SMTP rejection -> honest "failed" status
+    const mockSendMailFail = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Invalid login: 535 5.7.8 Authentication failed"), {
+        code: "EAUTH",
+        responseCode: 535,
+      }),
+    );
+    const failingTransport = createHostingerSmtpTransport({
       env: {
-        RESEND_API_KEY: "re_test_mock_key_123456",
-        RESEND_FROM_EMAIL: "The AI School HR <hr@theaischool.in>",
+        SMTP_HOST: "smtp.hostinger.com",
+        SMTP_PORT: "465",
+        SMTP_SECURE: "true",
+        SMTP_USER: "hr@theaischool.co",
+        SMTP_PASS: "MockSecretPass999",
+        EMAIL_FROM: "hr@theaischool.co",
       },
-      fetchImpl: mockFetchFail as unknown as typeof fetch,
+      transporterFactory: () => ({ sendMail: mockSendMailFail }),
       allowInTests: true,
+      retryBaseDelayMs: 0,
     });
 
     const failRes = await failingTransport.send({
@@ -684,13 +711,20 @@ describe("Phase P2 — Email Provider Readiness, Honest Delivery Status & Zero L
     expect(failRes.ok).toBe(false);
     expect(failRes.status).toBe("failed");
     if (!failRes.ok) {
-      expect(failRes.errorMessage).toContain("not verified");
+      expect(failRes.errorMessage).toContain("535");
+      expect(failRes.errorMessage).not.toContain("MockSecretPass999");
     }
 
-    // Webhook event mapping: ONLY "email.delivered" produces "delivered"
+    // Delivery event mapping preserves legacy "sent", adds "accepted_by_smtp" & "canceled"
+    expect(resolveStatusFromProviderEvent("smtp.accepted")).toEqual({
+      status: "accepted_by_smtp",
+    });
     expect(resolveStatusFromProviderEvent("email.sent")).toEqual({ status: "sent" });
     expect(resolveStatusFromProviderEvent("email.delivered")).toEqual({
       status: "delivered",
+    });
+    expect(resolveStatusFromProviderEvent("email.canceled")).toEqual({
+      status: "canceled",
     });
     expect(resolveStatusFromProviderEvent("email.bounced")?.status).toBe("failed");
   });

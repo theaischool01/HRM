@@ -866,6 +866,7 @@ export type Database = {
           recipient_name: string | null
           sent_at: string | null
           sent_by: string | null
+          smtp_response: string | null
           status: string
           subject: string
           template_slug: string | null
@@ -890,6 +891,7 @@ export type Database = {
           recipient_name?: string | null
           sent_at?: string | null
           sent_by?: string | null
+          smtp_response?: string | null
           status?: string
           subject: string
           template_slug?: string | null
@@ -914,6 +916,7 @@ export type Database = {
           recipient_name?: string | null
           sent_at?: string | null
           sent_by?: string | null
+          smtp_response?: string | null
           status?: string
           subject?: string
           template_slug?: string | null

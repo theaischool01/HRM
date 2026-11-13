@@ -37,7 +37,7 @@ export const SAMPLE_EMAIL_VARIABLES: Record<EmailVariableKey, string> = {
   interview_date: "18 Nov 2026",
   interview_time: "03:00 PM – 03:45 PM IST",
   meeting_link: "https://meet.google.com/abc-defg-hij",
-  hr_contact: "HR Team (hr@theaischool.in)",
+  hr_contact: "The AI School HR (hr@theaischool.co)",
   joining_date: "01 Dec 2026",
   employee_id: "TAS-042",
   interview_mode: "Online",
@@ -48,7 +48,13 @@ export const SAMPLE_EMAIL_VARIABLES: Record<EmailVariableKey, string> = {
 export type EmailTemplateDefinition = {
   slug: string;
   name: string;
-  category: "screening" | "interviews" | "decisions" | "offers" | "onboarding";
+  category:
+    | "screening"
+    | "interviews"
+    | "decisions"
+    | "offers"
+    | "onboarding"
+    | "communications";
   subjectTemplate: string;
   bodyHtmlTemplate: string;
   bodyTextTemplate: string;
@@ -222,6 +228,52 @@ export const DEFAULT_EMAIL_TEMPLATES: readonly EmailTemplateDefinition[] = [
       "hr_contact",
     ],
   },
+  {
+    slug: "document_correction_request",
+    name: "Document Correction Request",
+    category: "onboarding",
+    subjectTemplate:
+      "Action Needed: Document Correction for Onboarding — {{candidate_name}} | The AI School",
+    bodyHtmlTemplate:
+      "<p>Dear {{candidate_name}},</p><p>Thank you for submitting your onboarding documents for <strong>{{designation}}</strong> ({{department}}) ahead of your joining date (<strong>{{joining_date}}</strong>).</p><p>During HR verification, one or more uploaded documents require a clearer copy or updated details. Please sign in to the HRM portal to re-upload the requested document(s).</p><p>For any assistance, reply to {{hr_contact}}.</p><p>Best regards,<br/>{{hr_contact}}<br/>The AI School HR</p>",
+    bodyTextTemplate:
+      "Dear {{candidate_name}},\n\nThank you for submitting your onboarding documents for {{designation}} ({{department}}) ahead of {{joining_date}}.\n\nOne or more uploaded documents require a clearer copy or updated details. Please sign in to The AI School HRM portal to upload the corrected document(s).\n\nFor assistance, contact {{hr_contact}}.\n\nBest regards,\n{{hr_contact}}",
+    variables: [
+      "candidate_name",
+      "designation",
+      "department",
+      "joining_date",
+      "hr_contact",
+    ],
+  },
+  {
+    slug: "hr_announcement",
+    name: "HR Announcement",
+    category: "communications",
+    subjectTemplate: "Important HR Announcement — {{department}} | The AI School",
+    bodyHtmlTemplate:
+      '<p>Dear {{candidate_name}},</p><p>Please review the latest HR update shared for the <strong>{{department}}</strong> team at <strong>The AI School</strong> via the HRM portal.</p><p>Sign in at <a href="{{portal_url}}" style="color:#e11d48;">{{portal_url}}</a> to view any action items or updated workplace guidelines.</p><p>Regards,<br/>{{hr_contact}}<br/>The AI School HR</p>',
+    bodyTextTemplate:
+      "Dear {{candidate_name}},\n\nPlease review the latest HR announcement shared for the {{department}} team at The AI School.\n\nSign in to the HRM portal ({{portal_url}}) for full details and any required follow-up.\n\nRegards,\n{{hr_contact}}",
+    variables: ["candidate_name", "department", "portal_url", "hr_contact"],
+  },
+  {
+    slug: "work_notice",
+    name: "Work-Related Notice",
+    category: "communications",
+    subjectTemplate: "Workforce Notice: {{designation}} ({{department}}) | The AI School",
+    bodyHtmlTemplate:
+      '<p>Dear {{candidate_name}},</p><p>This is an official work-related notice regarding your assignment as <strong>{{designation}}</strong> in the <strong>{{department}}</strong> department at <strong>The AI School</strong>.</p><p>Please review your schedule and updates in the HRM portal (<a href="{{portal_url}}" style="color:#e11d48;">{{portal_url}}</a>) and reply to {{hr_contact}} if clarification is needed.</p><p>Sincerely,<br/>{{hr_contact}}<br/>The AI School HR</p>',
+    bodyTextTemplate:
+      "Dear {{candidate_name}},\n\nThis is an official work-related notice regarding your assignment as {{designation}} ({{department}}) at The AI School.\n\nPlease review your updates at {{portal_url}} or reply to {{hr_contact}} with any questions.\n\nSincerely,\n{{hr_contact}}",
+    variables: [
+      "candidate_name",
+      "designation",
+      "department",
+      "portal_url",
+      "hr_contact",
+    ],
+  },
 ] as const;
 
 const PLACEHOLDER_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
@@ -294,7 +346,16 @@ export function stripHtmlToText(html: string): string {
     .trim();
 }
 
-export function wrapBrandedEmailHtml(subject: string, innerHtml: string): string {
+export function wrapBrandedEmailHtml(
+  subject: string,
+  innerHtml: string,
+  options?: { portalUrl?: string | undefined },
+): string {
+  const basePortalUrl = (
+    options?.portalUrl?.trim() || "https://hrm.theaischool.co"
+  ).replace(/\/+$/, "");
+  const logoSrc = `${basePortalUrl}/the-ai-school-logo.png`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -302,19 +363,35 @@ export function wrapBrandedEmailHtml(subject: string, innerHtml: string): string
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(subject)}</title>
 </head>
-<body style="margin:0;padding:24px 12px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#18181b;">
-  <div style="max-width:580px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;border-radius:10px;overflow:hidden;">
-    <div style="padding:20px 28px;border-bottom:3px solid #e11d48;background:#ffffff;">
-      <strong style="font-size:18px;letter-spacing:-0.3px;color:#09090b;">THE <span style="color:#e11d48;">AI SCHOOL</span></strong>
-      <span style="float:right;font-size:11px;color:#71717a;text-transform:uppercase;letter-spacing:0.6px;">HR &amp; Talent</span>
-    </div>
-    <div style="padding:28px;font-size:15px;line-height:1.65;color:#27272a;">
-      ${innerHtml}
-    </div>
-    <div style="padding:16px 28px;background:#fafafa;border-top:1px solid #e4e4e7;font-size:12px;color:#71717a;">
-      &copy; ${new Date().getUTCFullYear()} The AI School · Official Recruitment &amp; Onboarding Communication
-    </div>
-  </div>
+<body style="margin:0;padding:24px 12px;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#18181b;">
+  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e4e4e7;border-radius:10px;overflow:hidden;">
+    <tr>
+      <td style="padding:20px 28px;border-bottom:3px solid #e11d48;background:#ffffff;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td style="vertical-align:middle;">
+              <img src="${escapeHtml(logoSrc)}" alt="The AI School" height="28" style="display:inline-block;height:28px;width:auto;vertical-align:middle;margin-right:10px;border:0;" />
+              <strong style="font-size:18px;letter-spacing:-0.3px;color:#09090b;vertical-align:middle;">THE <span style="color:#e11d48;">AI SCHOOL</span></strong>
+            </td>
+            <td style="vertical-align:middle;text-align:right;font-size:11px;color:#52525b;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">
+              HR &amp; Talent
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:28px;font-size:15px;line-height:1.65;color:#18181b;background:#ffffff;">
+        ${innerHtml}
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:16px 28px;background:#fafafa;border-top:1px solid #e4e4e7;font-size:12px;line-height:1.6;color:#52525b;">
+        The AI School HR &middot; Questions? Reply or email <a href="mailto:hr@theaischool.co" style="color:#e11d48;text-decoration:none;font-weight:600;">hr@theaischool.co</a><br/>
+        &copy; ${new Date().getUTCFullYear()} The AI School &middot; Official HR &amp; Recruitment Communication
+      </td>
+    </tr>
+  </table>
 </body>
 </html>`;
 }
@@ -373,10 +450,11 @@ export function renderEmailTemplate(params: {
 
   const subject = replacePlain(params.subjectTemplate).replace(/\s+/g, " ").trim();
   const renderedInnerHtml = replaceHtml(params.bodyHtmlTemplate);
+  const portalUrlRaw = params.variables.portal_url?.trim();
   const bodyHtml =
     params.wrapInBrandLayout === false
       ? renderedInnerHtml
-      : wrapBrandedEmailHtml(subject, renderedInnerHtml);
+      : wrapBrandedEmailHtml(subject, renderedInnerHtml, { portalUrl: portalUrlRaw });
   const bodyText = params.bodyTextTemplate
     ? replacePlain(params.bodyTextTemplate)
     : stripHtmlToText(renderedInnerHtml);

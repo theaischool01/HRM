@@ -1562,9 +1562,11 @@ function CandidatesPage() {
           <div className="space-y-3">
             {!data?.emailProvider.configured && (
               <div className="rounded-md border border-warning/50 bg-warning/10 p-3 text-xs text-warning">
-                Live sending is disabled until verified{" "}
-                <code className="font-mono">RESEND_API_KEY</code> and{" "}
-                <code className="font-mono">RESEND_FROM_EMAIL</code> are configured.
+                Live sending is disabled until Hostinger SMTP environment variables (
+                <code className="font-mono">SMTP_HOST</code>,{" "}
+                <code className="font-mono">SMTP_USER</code>,{" "}
+                <code className="font-mono">SMTP_PASS</code>,{" "}
+                <code className="font-mono">EMAIL_FROM</code>) are configured.
               </div>
             )}
             <div className="space-y-1.5">

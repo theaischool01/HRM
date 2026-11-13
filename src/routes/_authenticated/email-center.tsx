@@ -51,6 +51,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { describeUnknownError } from "@/lib/describe-error";
 import {
+  cancelEmailMessage,
   getEmailCenterData,
   resetEmailTemplateToDefault,
   retryFailedEmail,
@@ -58,6 +59,7 @@ import {
   saveEmailTemplate,
   sendBulkRecruitmentEmails,
   sendRecruitmentEmail,
+  verifyEmailProviderConnection,
 } from "@/lib/email-center.functions";
 import {
   EMAIL_VARIABLE_DESCRIPTIONS,
@@ -74,29 +76,43 @@ export const Route = createFileRoute("/_authenticated/email-center")({
 });
 
 type ComposeMode = "individual" | "bulk" | "test";
-type LogFilter = "all" | "sent" | "delivered" | "failed" | "draft";
+type LogFilter =
+  | "all"
+  | "accepted_by_smtp"
+  | "delivered"
+  | "failed"
+  | "draft"
+  | "canceled";
 type PreviewMode = "desktop" | "mobile" | "text";
 
 function statusBadgeVariant(
   status: string,
 ): "success" | "info" | "destructive" | "neutral" | "outline" {
   if (status === "delivered") return "success";
-  if (status === "sent") return "info";
+  if (status === "accepted_by_smtp" || status === "sent") return "info";
   if (status === "failed") return "destructive";
-  if (status === "draft") return "neutral";
+  if (status === "draft" || status === "canceled") return "neutral";
   return "outline";
 }
 
 function statusDisplayLabel(status: string): string {
   switch (status) {
+    case "accepted_by_smtp":
+      return "Accepted by SMTP";
     case "sent":
-      return "Sent (Provider Accepted)";
+      return "Accepted (Legacy)";
+    case "queued":
+      return "Queued";
+    case "sending":
+      return "Sending";
     case "delivered":
       return "Delivered (Confirmed)";
     case "failed":
       return "Failed";
     case "draft":
       return "Draft";
+    case "canceled":
+      return "Canceled";
     default:
       return status;
   }
@@ -143,9 +159,11 @@ function EmailCenterPage() {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
 
-  // Delivery history filter state
+  // Delivery history & verification state
   const [logFilter, setLogFilter] = useState<LogFilter>("all");
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [verifyingSmtp, setVerifyingSmtp] = useState(false);
 
   const data = centerQuery.data;
   const templates = data?.templates ?? [];
@@ -223,9 +241,13 @@ function EmailCenterPage() {
     variables: composeVars,
   });
 
-  const filteredMessages = (data?.messages ?? []).filter((m) =>
-    logFilter === "all" ? true : m.status === logFilter,
-  );
+  const filteredMessages = (data?.messages ?? []).filter((m) => {
+    if (logFilter === "all") return true;
+    if (logFilter === "accepted_by_smtp") {
+      return m.status === "accepted_by_smtp" || m.status === "sent";
+    }
+    return m.status === logFilter;
+  });
 
   async function refreshCenter() {
     await queryClient.invalidateQueries({ queryKey: ["recruitment", "email-center"] });
@@ -376,7 +398,7 @@ function EmailCenterPage() {
     try {
       setRetryingId(messageId);
       const res = await retryFailedEmail({ data: { messageId } });
-      toast.success(`Retry succeeded — status updated to "${res.status}".`);
+      toast.success(`Retry accepted by SMTP — status updated to "${res.status}".`);
       await refreshCenter();
     } catch (err) {
       toast.error(describeUnknownError(err));
@@ -386,10 +408,39 @@ function EmailCenterPage() {
     }
   }
 
+  async function handleCancelMessage(messageId: string) {
+    try {
+      setCancelingId(messageId);
+      await cancelEmailMessage({ data: { messageId } });
+      toast.success("Queued/draft email marked as canceled.");
+      await refreshCenter();
+    } catch (err) {
+      toast.error(describeUnknownError(err));
+    } finally {
+      setCancelingId(null);
+    }
+  }
+
+  async function handleVerifySmtp() {
+    try {
+      setVerifyingSmtp(true);
+      const res = await verifyEmailProviderConnection();
+      if (res.ok) {
+        toast.success(res.message);
+      } else {
+        toast.error(res.message);
+      }
+    } catch (err) {
+      toast.error(describeUnknownError(err));
+    } finally {
+      setVerifyingSmtp(false);
+    }
+  }
+
   return (
     <AppShell
       title="HR Email & Communication Center"
-      description="Manage all 12 standardized recruitment & onboarding templates, validate dynamic placeholders, preview branded layouts, and audit honest delivery states."
+      description="Manage standardized recruitment, onboarding & HR communication templates, validate dynamic placeholders, preview branded layouts, and dispatch via Hostinger SMTP."
       actions={
         <Button
           size="sm"
@@ -434,12 +485,29 @@ function EmailCenterPage() {
             <div className="flex items-center gap-2">
               <CheckCircle2 className="size-4 text-emerald-600" />
               <span>
-                <strong className="text-foreground">Verified Email Provider Active</strong>{" "}
-                — Dispatches via Resend from{" "}
+                <strong className="text-foreground">Hostinger SMTP Transport Ready</strong>{" "}
+                —{" "}
+                <code className="font-mono">
+                  {data.providerStatus.smtpHost}:{data.providerStatus.smtpPort}
+                </code>{" "}
+                ({data.providerStatus.smtpSecure ? "SSL/TLS" : "STARTTLS"}) from{" "}
                 <code className="font-mono">{data.providerStatus.senderDisplay}</code>.
               </span>
             </div>
-            <Badge variant="secondary">Provider Ready</Badge>
+            <div className="flex items-center gap-2">
+              {canSendEmails ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void handleVerifySmtp()}
+                  disabled={verifyingSmtp}
+                >
+                  <RefreshCw className="mr-1.5 size-3" />
+                  {verifyingSmtp ? "Verifying..." : "Verify SMTP Connection"}
+                </Button>
+              ) : null}
+              <Badge variant="secondary">Hostinger SMTP</Badge>
+            </div>
           </div>
         ) : (
           <Card className="mb-5 border-amber-500/40 bg-amber-500/5">
@@ -447,12 +515,14 @@ function EmailCenterPage() {
               <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-600" />
               <div className="space-y-1.5 text-xs">
                 <p className="text-sm font-semibold text-foreground">
-                  Live Email Sending Locked — Verified Sender Configuration Required
+                  Live Email Sending Locked — Hostinger SMTP Configuration Required
                 </p>
                 <p className="text-muted-foreground">
                   Template editing, variable validation, branded HTML preview, and saving
-                  drafts are fully available. Live sending unlocks automatically once a
-                  verified Resend domain is configured on the server:
+                  drafts are fully available. Live sending unlocks automatically once
+                  Hostinger SMTP environment variables (<code>SMTP_HOST</code>,{" "}
+                  <code>SMTP_PORT</code>, <code>SMTP_SECURE</code>, <code>SMTP_USER</code>,{" "}
+                  <code>SMTP_PASS</code>, <code>EMAIL_FROM</code>) are configured on the server:
                 </p>
                 <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
                   {data.providerStatus.issues.map((issue) => (
@@ -480,7 +550,7 @@ function EmailCenterPage() {
         <TabsList>
           <TabsTrigger value="templates">
             <FileCode2 className="mr-1.5 size-3.5" />
-            12 HR Templates ({templates.length})
+            HR Templates ({templates.length})
           </TabsTrigger>
           <TabsTrigger value="compose">
             <Send className="mr-1.5 size-3.5" />
@@ -820,7 +890,7 @@ function EmailCenterPage() {
                       type="email"
                       value={composeRecipientEmail}
                       onChange={(e) => setComposeRecipientEmail(e.target.value)}
-                      placeholder="hr-tester@theaischool.in"
+                      placeholder="hr@theaischool.co"
                     />
                   </div>
                 ) : null}
@@ -1106,21 +1176,21 @@ function EmailCenterPage() {
 
             <Card>
               <CardHeader className="pb-2">
-                <CardDescription>Sent (Provider Accepted)</CardDescription>
+                <CardDescription>Accepted by SMTP</CardDescription>
                 <CardTitle className="text-2xl">{data?.stats.sent ?? 0}</CardTitle>
               </CardHeader>
               <CardContent className="text-xs text-muted-foreground">
-                Accepted by Resend API (HTTP 2xx)
+                Accepted by Hostinger SMTP relay (not proof of inbox delivery)
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="pb-2">
-                <CardDescription>Delivered (Webhook Confirmed)</CardDescription>
+                <CardDescription>Delivered (Confirmed)</CardDescription>
                 <CardTitle className="text-2xl">{data?.stats.delivered ?? 0}</CardTitle>
               </CardHeader>
               <CardContent className="text-xs text-muted-foreground">
-                Confirmed only via provider delivery event
+                Marked delivered only with trustworthy delivery evidence
               </CardContent>
             </Card>
 
@@ -1140,22 +1210,30 @@ function EmailCenterPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap gap-1.5">
-              {(["all", "sent", "delivered", "failed", "draft"] as const).map((f) => (
+              {(
+                [
+                  { id: "all", label: "All" },
+                  { id: "accepted_by_smtp", label: "Accepted by SMTP" },
+                  { id: "delivered", label: "Delivered" },
+                  { id: "failed", label: "Failed" },
+                  { id: "draft", label: "Draft" },
+                  { id: "canceled", label: "Canceled" },
+                ] as const
+              ).map((f) => (
                 <Button
-                  key={f}
+                  key={f.id}
                   size="sm"
-                  aria-pressed={logFilter === f}
-                  variant={logFilter === f ? "default" : "outline"}
-                  onClick={() => setLogFilter(f)}
-                  className="capitalize"
+                  aria-pressed={logFilter === f.id}
+                  variant={logFilter === f.id ? "default" : "outline"}
+                  onClick={() => setLogFilter(f.id)}
                 >
-                  {f}
+                  {f.label}
                 </Button>
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
-              Honest Delivery Policy: messages remain <code>sent</code> until provider
-              webhook confirmation promotes them to <code>delivered</code>.
+              Honest SMTP Policy: 250 OK marks <code>accepted_by_smtp</code>, never{" "}
+              <code>delivered</code>, unless verified delivery evidence exists.
             </p>
           </div>
 
@@ -1226,28 +1304,41 @@ function EmailCenterPage() {
                             )}
                           </td>
                           <td className="py-3 text-right">
-                            {canSendEmails &&
-                            (msg.status === "failed" || msg.status === "draft") ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={!providerConfigured || retryingId === msg.id}
-                                onClick={() => handleRetryMessage(msg.id)}
-                              >
-                                {msg.status === "draft" ? (
-                                  <Send className="mr-1 size-3" />
-                                ) : (
-                                  <RotateCcw className="mr-1 size-3" />
-                                )}
-                                {retryingId === msg.id
-                                  ? msg.status === "draft"
-                                    ? "Sending..."
-                                    : "Retrying..."
-                                  : msg.status === "draft"
-                                    ? "Send Draft"
-                                    : "Retry"}
-                              </Button>
-                            ) : null}
+                            <div className="flex items-center justify-end gap-1.5">
+                              {canSendEmails &&
+                              (msg.status === "failed" || msg.status === "draft") ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!providerConfigured || retryingId === msg.id}
+                                  onClick={() => handleRetryMessage(msg.id)}
+                                >
+                                  {msg.status === "draft" ? (
+                                    <Send className="mr-1 size-3" />
+                                  ) : (
+                                    <RotateCcw className="mr-1 size-3" />
+                                  )}
+                                  {retryingId === msg.id
+                                    ? msg.status === "draft"
+                                      ? "Sending..."
+                                      : "Retrying..."
+                                    : msg.status === "draft"
+                                      ? "Send Draft"
+                                      : "Retry"}
+                                </Button>
+                              ) : null}
+                              {canSendEmails &&
+                              (msg.status === "draft" || msg.status === "queued") ? (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={cancelingId === msg.id}
+                                  onClick={() => handleCancelMessage(msg.id)}
+                                >
+                                  {cancelingId === msg.id ? "Canceling..." : "Cancel"}
+                                </Button>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -1300,8 +1391,8 @@ function EmailCenterPage() {
               <strong>
                 {templates.find((t) => t.slug === composeSlug)?.name ?? composeSlug}
               </strong>{" "}
-              via verified Resend sender with per-recipient variable interpolation and duplicate
-              protection.
+              via Hostinger SMTP (<code>hr@theaischool.co</code>) with rate pacing,
+              per-recipient variable interpolation, and duplicate protection.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

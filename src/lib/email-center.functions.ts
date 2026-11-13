@@ -11,10 +11,34 @@ import {
   type EmailVariableKey,
 } from "./recruitment/email-templates";
 import {
-  createResendEmailTransport,
+  containsHeaderInjection,
+  createHostingerSmtpTransport,
   inspectEmailProviderConfig,
+  SMTP_BULK_MAX_RECIPIENTS,
+  SMTP_BULK_PACING_MS,
+  validateRecipientEmail,
+  verifySmtpConnection,
 } from "./recruitment/email-transport.server";
 import { isMissingSchemaResourceError } from "./schema-compat.server";
+
+function isAcceptedDeliveryStatus(status: string | null | undefined): boolean {
+  return (
+    status === "accepted_by_smtp" ||
+    status === "sent" ||
+    status === "delivered"
+  );
+}
+
+function isLegacyEmailSchemaError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const msg = (error.message ?? "").toLowerCase();
+  return (
+    error.code === "23514" ||
+    error.code === "42703" ||
+    msg.includes("smtp_response") ||
+    msg.includes("email_messages_status_check")
+  );
+}
 
 const PENDING_SCHEMA_MSG =
   "Phase P2 Email Center tables are not yet deployed to this database. Apply migration 20261112000000_p2_recruitment_interviews_and_email_center.sql after approval.";
@@ -61,22 +85,39 @@ export const getEmailCenterData = createServerFn({ method: "GET" })
 
     const dbBySlug = new Map((templatesRes.data ?? []).map((t) => [t.slug, t]));
 
-    // Guarantee all 12 standard HR templates are always available for preview/editing
-    const templates = DEFAULT_EMAIL_TEMPLATES.map((def) => {
-      const dbRow = dbBySlug.get(def.slug);
-      return {
-        id: dbRow?.id ?? null,
-        slug: def.slug,
-        name: dbRow?.name ?? def.name,
-        category: dbRow?.category ?? def.category,
-        subjectTemplate: dbRow?.subject_template ?? def.subjectTemplate,
-        bodyHtmlTemplate: dbRow?.body_html_template ?? def.bodyHtmlTemplate,
-        bodyTextTemplate: dbRow?.body_text_template ?? def.bodyTextTemplate,
-        variables: (dbRow?.variables ?? def.variables) as string[],
-        isActive: dbRow?.is_active ?? true,
-        updatedAt: dbRow?.updated_at ?? null,
-      };
-    });
+    // Guarantee all standard HR templates plus any custom DB templates are available
+    const defaultSlugSet = new Set(DEFAULT_EMAIL_TEMPLATES.map((t) => t.slug));
+    const templates = [
+      ...DEFAULT_EMAIL_TEMPLATES.map((def) => {
+        const dbRow = dbBySlug.get(def.slug);
+        return {
+          id: dbRow?.id ?? null,
+          slug: def.slug,
+          name: dbRow?.name ?? def.name,
+          category: dbRow?.category ?? def.category,
+          subjectTemplate: dbRow?.subject_template ?? def.subjectTemplate,
+          bodyHtmlTemplate: dbRow?.body_html_template ?? def.bodyHtmlTemplate,
+          bodyTextTemplate: dbRow?.body_text_template ?? def.bodyTextTemplate,
+          variables: (dbRow?.variables ?? def.variables) as string[],
+          isActive: dbRow?.is_active ?? true,
+          updatedAt: dbRow?.updated_at ?? null,
+        };
+      }),
+      ...(templatesRes.data ?? [])
+        .filter((row) => !defaultSlugSet.has(row.slug))
+        .map((row) => ({
+          id: row.id,
+          slug: row.slug,
+          name: row.name,
+          category: row.category,
+          subjectTemplate: row.subject_template,
+          bodyHtmlTemplate: row.body_html_template,
+          bodyTextTemplate: row.body_text_template,
+          variables: row.variables as string[],
+          isActive: row.is_active,
+          updatedAt: row.updated_at,
+        })),
+    ];
 
     const deptMap = new Map((departments ?? []).map((d) => [d.id, d.name]));
     const candidates = (candidatesRes.error ? [] : (candidatesRes.data ?? [])).map((c) => ({
@@ -91,12 +132,17 @@ export const getEmailCenterData = createServerFn({ method: "GET" })
     }));
 
     const messages = messagesRes.data ?? [];
+    const acceptedCount = messages.filter(
+      (m) => m.status === "accepted_by_smtp" || m.status === "sent",
+    ).length;
     const stats = {
       total: messages.length,
       draft: messages.filter((m) => m.status === "draft").length,
-      sent: messages.filter((m) => m.status === "sent").length,
+      sent: acceptedCount,
+      acceptedBySmtp: acceptedCount,
       delivered: messages.filter((m) => m.status === "delivered").length,
       failed: messages.filter((m) => m.status === "failed").length,
+      canceled: messages.filter((m) => m.status === "canceled").length,
     };
 
     return {
@@ -277,6 +323,76 @@ export const saveEmailDraft = createServerFn({ method: "POST" })
     return { ok: true, id: saved.id };
   });
 
+export const verifyEmailProviderConnection = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "emails:send:all");
+
+    const result = await verifySmtpConnection();
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: result.ok ? "email_provider.verified" : "email_provider.verify_failed",
+      entityType: "email_provider",
+      entityId: "hostinger_smtp",
+      detail: {
+        provider: result.provider,
+        smtpHost: result.smtpHost,
+        smtpPort: result.smtpPort,
+        smtpSecure: result.smtpSecure,
+        senderDisplay: result.senderDisplay,
+        message: result.message,
+      },
+    });
+
+    return result;
+  });
+
+export const cancelEmailMessage = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { messageId: string }) => {
+    if (!input?.messageId) throw new Error("Email message ID is required.");
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "emails:send:all");
+
+    const { data: msg, error } = await supabase
+      .from("email_messages")
+      .select("id, status, recipient_email")
+      .eq("id", data.messageId)
+      .maybeSingle();
+
+    if (error) rethrowDbError("Loading email message failed", error);
+    if (!msg) throw new Error("Email message not found.");
+    if (msg.status !== "draft" && msg.status !== "queued") {
+      throw new Error(
+        `Only draft or queued messages can be canceled (current: ${msg.status}).`,
+      );
+    }
+
+    const { error: cancelErr } = await supabase
+      .from("email_messages")
+      .update({ status: "canceled" })
+      .eq("id", msg.id);
+
+    if (cancelErr) rethrowDbError("Canceling email message failed", cancelErr);
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "recruitment_email.canceled",
+      entityType: "email_message",
+      entityId: msg.id,
+      detail: { recipientEmail: msg.recipient_email, previousStatus: msg.status },
+    });
+
+    return { ok: true, status: "canceled" as const };
+  });
+
 export const sendRecruitmentEmail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator(
@@ -286,6 +402,7 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       interviewId?: string | null | undefined;
       recipientEmail: string;
       recipientName?: string | null | undefined;
+      replyTo?: string | null | undefined;
       subjectTemplate: string;
       bodyHtmlTemplate: string;
       bodyTextTemplate?: string | null | undefined;
@@ -293,22 +410,33 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       isTest?: boolean | undefined;
       dedupeToken?: string | undefined;
     }) => {
-      const recipientEmail = String(input?.recipientEmail ?? "").trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
-        throw new Error("A valid recipient email address is required.");
+      const check = validateRecipientEmail(String(input?.recipientEmail ?? ""));
+      if (!check.valid) {
+        throw new Error(check.reason || "A valid recipient email address is required.");
       }
-      return { ...input, recipientEmail };
+      let replyTo: string | null = null;
+      if (input?.replyTo && String(input.replyTo).trim()) {
+        const replyCheck = validateRecipientEmail(String(input.replyTo));
+        if (!replyCheck.valid) {
+          throw new Error("Reply-To email address is invalid.");
+        }
+        replyTo = replyCheck.normalized;
+      }
+      if (containsHeaderInjection(String(input?.subjectTemplate ?? ""))) {
+        throw new Error("Email subject contains unsafe control characters.");
+      }
+      return { ...input, recipientEmail: check.normalized, replyTo };
     },
   )
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     await requirePermission(supabase, userId, "emails:send:all");
 
-    // 1. Verify real email-provider configuration BEFORE enabling sending
+    // 1. Verify Hostinger SMTP configuration BEFORE enabling sending
     const providerStatus = inspectEmailProviderConfig();
     if (!providerStatus.configured) {
       throw new Error(
-        `Email sending is disabled until a verified sender is configured: ${providerStatus.issues.join(" ")}`,
+        `Email sending is disabled until Hostinger SMTP is configured: ${providerStatus.issues.join(" ")}`,
       );
     }
 
@@ -353,25 +481,23 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       rethrowDbError("Checking email idempotency failed", checkErr);
     }
 
-    if (
-      existingMsg &&
-      (existingMsg.status === "sent" || existingMsg.status === "delivered")
-    ) {
+    if (existingMsg && isAcceptedDeliveryStatus(existingMsg.status)) {
       return {
         ok: true,
         deduplicated: true,
         messageId: existingMsg.id,
-        status: existingMsg.status as "sent" | "delivered",
+        status: existingMsg.status as "accepted_by_smtp" | "sent" | "delivered",
         providerMessageId: existingMsg.provider_message_id,
       };
     }
 
-    const transport = createResendEmailTransport();
+    const transport = createHostingerSmtpTransport();
     const sendResult = await transport.send({
       to: data.recipientEmail,
       subject: data.isTest ? `[TEST] ${rendered.subject}` : rendered.subject,
       html: rendered.bodyHtml,
       text: rendered.bodyText,
+      replyTo: data.replyTo ?? undefined,
       idempotencyKey,
     });
 
@@ -388,34 +514,56 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       body_text: rendered.bodyText,
       variables_payload: data.variables as never,
       is_test: Boolean(data.isTest),
-      // Honest delivery status: provider 200 OK sets "sent", NEVER "delivered"
+      // Honest delivery status: SMTP 250 sets "accepted_by_smtp", NEVER "delivered"
       status: sendResult.status,
       provider: sendResult.provider,
       provider_message_id: sendResult.ok ? sendResult.providerMessageId : null,
-      attempts: 1,
+      smtp_response: sendResult.ok ? sendResult.smtpResponse : null,
+      attempts: Math.max(1, sendResult.attemptsUsed),
       error_message: sendResult.ok ? null : sendResult.errorMessage,
       sent_by: userId,
       sent_at: sendResult.ok ? nowIso : null,
     };
 
-    const { data: stored, error: storeErr } = await supabase
+    let { data: stored, error: storeErr } = await supabase
       .from("email_messages")
       .upsert(recordPayload, { onConflict: "idempotency_key" })
       .select("id")
       .single();
 
-    if (storeErr) rethrowDbError("Recording email delivery status failed", storeErr);
+    if (storeErr && isLegacyEmailSchemaError(storeErr)) {
+      const { smtp_response: _drop, ...legacyBase } = recordPayload;
+      const legacyRetry = await supabase
+        .from("email_messages")
+        .upsert(
+          {
+            ...legacyBase,
+            status: sendResult.ok ? "sent" : "failed",
+          },
+          { onConflict: "idempotency_key" },
+        )
+        .select("id")
+        .single();
+      stored = legacyRetry.data;
+      storeErr = legacyRetry.error;
+    }
+
+    if (storeErr || !stored) {
+      rethrowDbError("Recording email delivery status failed", storeErr);
+    }
 
     if (sendResult.ok && data.candidateId && !data.isTest) {
       await supabase.from("candidate_activities").insert({
         candidate_id: data.candidateId,
         actor_id: userId,
         activity_type: "email_sent",
-        body: `Sent email "${rendered.subject}" to ${data.recipientEmail}`,
+        body: `Accepted by Hostinger SMTP: "${rendered.subject}" to ${data.recipientEmail}`,
         metadata: {
           emailMessageId: stored.id,
           templateSlug: data.templateSlug ?? null,
+          provider: sendResult.provider,
           providerMessageId: sendResult.providerMessageId,
+          smtpResponse: sendResult.smtpResponse,
         },
       });
     }
@@ -430,7 +578,10 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
         recipientEmail: data.recipientEmail,
         templateSlug: data.templateSlug ?? null,
         isTest: Boolean(data.isTest),
+        provider: sendResult.provider,
         status: sendResult.status,
+        attempts: sendResult.attemptsUsed,
+        providerMessageId: sendResult.ok ? sendResult.providerMessageId : null,
         error: sendResult.ok ? null : sendResult.errorMessage,
       },
     });
@@ -445,6 +596,7 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       messageId: stored.id,
       status: sendResult.status,
       providerMessageId: sendResult.providerMessageId,
+      smtpResponse: sendResult.smtpResponse,
     };
   });
 
@@ -459,8 +611,10 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
       if (!Array.isArray(input?.candidateIds) || input.candidateIds.length === 0) {
         throw new Error("Select at least one candidate for bulk email.");
       }
-      if (input.candidateIds.length > 100) {
-        throw new Error("Bulk emails are capped at 100 candidates per batch.");
+      if (input.candidateIds.length > SMTP_BULK_MAX_RECIPIENTS) {
+        throw new Error(
+          `Bulk emails are capped at ${SMTP_BULK_MAX_RECIPIENTS} candidates per batch to stay within Hostinger SMTP sending limits.`,
+        );
       }
       if (!input.templateSlug) throw new Error("Choose an email template.");
       return input;
@@ -474,7 +628,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
     const providerStatus = inspectEmailProviderConfig();
     if (!providerStatus.configured) {
       throw new Error(
-        `Bulk sending is disabled until a verified sender is configured: ${providerStatus.issues.join(" ")}`,
+        `Bulk sending is disabled until Hostinger SMTP is configured: ${providerStatus.issues.join(" ")}`,
       );
     }
 
@@ -520,7 +674,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
       }
     }
 
-    const transport = createResendEmailTransport();
+    const transport = createHostingerSmtpTransport();
     const portalUrl =
       process.env["SITE_URL"] ||
       process.env["VITE_SITE_URL"] ||
@@ -531,14 +685,27 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
     let sentCount = 0;
     let skippedDuplicateCount = 0;
     let failedCount = 0;
+    let dispatchedAttemptsInBatch = 0;
     const results: {
       candidateId: string;
       email: string;
-      status: "sent" | "skipped_duplicate" | "failed";
+      status: "accepted_by_smtp" | "skipped_duplicate" | "failed";
       reason?: string;
     }[] = [];
 
     for (const cand of candidates ?? []) {
+      const recipientCheck = validateRecipientEmail(cand.email);
+      if (!recipientCheck.valid) {
+        failedCount += 1;
+        results.push({
+          candidateId: cand.id,
+          email: cand.email,
+          status: "failed",
+          reason: recipientCheck.reason || "Invalid candidate email address.",
+        });
+        continue;
+      }
+
       const iv = nextIvByCandidate.get(cand.id);
       const slot = iv
         ? formatInterviewIstSlot(iv.scheduled_start_at, iv.scheduled_end_at)
@@ -573,7 +740,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
         failedCount += 1;
         results.push({
           candidateId: cand.id,
-          email: cand.email,
+          email: recipientCheck.normalized,
           status: "failed",
           reason: `Missing variables: ${rendered.missingVariables.join(", ")}`,
         });
@@ -582,7 +749,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
 
       const idempotencyKey = buildEmailIdempotencyKey({
         templateSlug: data.templateSlug,
-        recipientEmail: cand.email,
+        recipientEmail: recipientCheck.normalized,
         candidateId: cand.id,
         subject: rendered.subject,
         dedupeToken: hourlyBucket,
@@ -594,45 +761,64 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
         .eq("idempotency_key", idempotencyKey)
         .maybeSingle();
 
-      if (dup && (dup.status === "sent" || dup.status === "delivered")) {
+      if (dup && isAcceptedDeliveryStatus(dup.status)) {
         skippedDuplicateCount += 1;
         results.push({
           candidateId: cand.id,
-          email: cand.email,
+          email: recipientCheck.normalized,
           status: "skipped_duplicate",
         });
         continue;
       }
 
+      // Apply safe SMTP pacing between actual sends in a bulk batch
+      if (dispatchedAttemptsInBatch > 0 && SMTP_BULK_PACING_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, SMTP_BULK_PACING_MS));
+      }
+      dispatchedAttemptsInBatch += 1;
+
       const dispatchRes = await transport.send({
-        to: cand.email,
+        to: recipientCheck.normalized,
         subject: rendered.subject,
         html: rendered.bodyHtml,
         text: rendered.bodyText,
         idempotencyKey,
       });
 
-      await supabase.from("email_messages").upsert(
-        {
-          idempotency_key: idempotencyKey,
-          template_slug: data.templateSlug,
-          candidate_id: cand.id,
-          recipient_email: cand.email,
-          recipient_name: cand.full_name,
-          subject: rendered.subject,
-          body_html: rendered.bodyHtml,
-          body_text: rendered.bodyText,
-          variables_payload: vars as never,
-          status: dispatchRes.status,
-          provider: dispatchRes.provider,
-          provider_message_id: dispatchRes.ok ? dispatchRes.providerMessageId : null,
-          attempts: 1,
-          error_message: dispatchRes.ok ? null : dispatchRes.errorMessage,
-          sent_by: userId,
-          sent_at: dispatchRes.ok ? new Date().toISOString() : null,
-        },
-        { onConflict: "idempotency_key" },
-      );
+      const bulkRowPayload = {
+        idempotency_key: idempotencyKey,
+        template_slug: data.templateSlug,
+        candidate_id: cand.id,
+        recipient_email: recipientCheck.normalized,
+        recipient_name: cand.full_name,
+        subject: rendered.subject,
+        body_html: rendered.bodyHtml,
+        body_text: rendered.bodyText,
+        variables_payload: vars as never,
+        status: dispatchRes.status,
+        provider: dispatchRes.provider,
+        provider_message_id: dispatchRes.ok ? dispatchRes.providerMessageId : null,
+        smtp_response: dispatchRes.ok ? dispatchRes.smtpResponse : null,
+        attempts: Math.max(1, dispatchRes.attemptsUsed),
+        error_message: dispatchRes.ok ? null : dispatchRes.errorMessage,
+        sent_by: userId,
+        sent_at: dispatchRes.ok ? new Date().toISOString() : null,
+      };
+
+      const { error: upsertErr } = await supabase
+        .from("email_messages")
+        .upsert(bulkRowPayload, { onConflict: "idempotency_key" });
+
+      if (upsertErr && isLegacyEmailSchemaError(upsertErr)) {
+        const { smtp_response: _drop, ...legacyBulk } = bulkRowPayload;
+        await supabase.from("email_messages").upsert(
+          {
+            ...legacyBulk,
+            status: dispatchRes.ok ? "sent" : "failed",
+          },
+          { onConflict: "idempotency_key" },
+        );
+      }
 
       if (dispatchRes.ok) {
         sentCount += 1;
@@ -640,14 +826,18 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
           candidate_id: cand.id,
           actor_id: userId,
           activity_type: "email_sent",
-          body: `Sent bulk template "${data.templateSlug}" (${rendered.subject})`,
+          body: `Accepted by Hostinger SMTP: bulk template "${data.templateSlug}" (${rendered.subject})`,
         });
-        results.push({ candidateId: cand.id, email: cand.email, status: "sent" });
+        results.push({
+          candidateId: cand.id,
+          email: recipientCheck.normalized,
+          status: "accepted_by_smtp",
+        });
       } else {
         failedCount += 1;
         results.push({
           candidateId: cand.id,
-          email: cand.email,
+          email: recipientCheck.normalized,
           status: "failed",
           reason: dispatchRes.errorMessage,
         });
@@ -661,6 +851,7 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
       entityType: "email_batch",
       detail: {
         templateSlug: data.templateSlug,
+        provider: "hostinger_smtp",
         requested: data.candidateIds.length,
         sentCount,
         skippedDuplicateCount,
@@ -690,7 +881,7 @@ export const retryFailedEmail = createServerFn({ method: "POST" })
     const providerStatus = inspectEmailProviderConfig();
     if (!providerStatus.configured) {
       throw new Error(
-        `Cannot retry until email provider is configured: ${providerStatus.issues.join(" ")}`,
+        `Cannot retry until Hostinger SMTP is configured: ${providerStatus.issues.join(" ")}`,
       );
     }
 
@@ -706,28 +897,49 @@ export const retryFailedEmail = createServerFn({ method: "POST" })
       throw new Error(`Only failed or draft emails can be retried (current: ${msg.status}).`);
     }
 
-    const nextAttempt = (msg.attempts ?? 0) + 1;
-    const retryKey = `${msg.idempotency_key}:attempt:${nextAttempt}`;
+    const recipientCheck = validateRecipientEmail(msg.recipient_email);
+    if (!recipientCheck.valid) {
+      throw new Error(recipientCheck.reason || "Invalid recipient email address.");
+    }
 
-    const transport = createResendEmailTransport();
+    const retryAttemptIndex = (msg.attempts ?? 0) + 1;
+    const retryKey = `${msg.idempotency_key}:attempt:${retryAttemptIndex}`;
+
+    const transport = createHostingerSmtpTransport();
     const res = await transport.send({
-      to: msg.recipient_email,
+      to: recipientCheck.normalized,
       subject: msg.subject,
       html: msg.body_html,
       text: msg.body_text ?? undefined,
       idempotencyKey: retryKey,
     });
 
-    await supabase
+    const totalAttempts = (msg.attempts ?? 0) + Math.max(1, res.attemptsUsed);
+    const updatePayload = {
+      status: res.status,
+      provider: res.provider,
+      attempts: totalAttempts,
+      provider_message_id: res.ok ? res.providerMessageId : null,
+      smtp_response: res.ok ? res.smtpResponse : null,
+      error_message: res.ok ? null : res.errorMessage,
+      sent_at: res.ok ? new Date().toISOString() : null,
+    };
+
+    const { error: updErr } = await supabase
       .from("email_messages")
-      .update({
-        status: res.status,
-        attempts: nextAttempt,
-        provider_message_id: res.ok ? res.providerMessageId : null,
-        error_message: res.ok ? null : res.errorMessage,
-        sent_at: res.ok ? new Date().toISOString() : null,
-      })
+      .update(updatePayload)
       .eq("id", msg.id);
+
+    if (updErr && isLegacyEmailSchemaError(updErr)) {
+      const { smtp_response: _drop, ...legacyUpd } = updatePayload;
+      await supabase
+        .from("email_messages")
+        .update({
+          ...legacyUpd,
+          status: res.ok ? "sent" : "failed",
+        })
+        .eq("id", msg.id);
+    }
 
     const { writeAudit } = await import("./audit.server");
     await writeAudit(supabase, {
@@ -736,7 +948,8 @@ export const retryFailedEmail = createServerFn({ method: "POST" })
       entityType: "email_message",
       entityId: msg.id,
       detail: {
-        attempt: nextAttempt,
+        provider: res.provider,
+        attempt: totalAttempts,
         status: res.status,
         error: res.ok ? null : res.errorMessage,
       },
@@ -746,6 +959,11 @@ export const retryFailedEmail = createServerFn({ method: "POST" })
       throw new Error(`Retry failed: ${res.errorMessage}`);
     }
 
-    return { ok: true, status: res.status, providerMessageId: res.providerMessageId };
+    return {
+      ok: true,
+      status: res.status,
+      providerMessageId: res.providerMessageId,
+      smtpResponse: res.smtpResponse,
+    };
   });
 
