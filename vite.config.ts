@@ -1,9 +1,94 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import type { Plugin } from "vite";
+
+type NodeAbortError = Error & {
+  code?: string;
+  status?: number;
+  statusCode?: number;
+  statusText?: string;
+};
+
+const NODE_ABORT_CODES = new Set(["ECONNRESET", "ECONNABORTED", "EPIPE"]);
+
+function isNodeAbortError(
+  err: unknown,
+  req: IncomingMessage,
+  res: ServerResponse
+): err is NodeAbortError {
+  if (err == null || typeof err !== "object") {
+    return false;
+  }
+  const candidate = err as Partial<NodeAbortError>;
+  if (candidate.code && NODE_ABORT_CODES.has(candidate.code)) {
+    return true;
+  }
+  if (candidate.message === "aborted" || candidate.name === "AbortError") {
+    return true;
+  }
+  return Boolean(req.destroyed || res.destroyed);
+}
+
+function stampClientAbortMetadata(err: NodeAbortError): void {
+  try {
+    err.status ??= 499;
+    err.statusCode ??= 499;
+    err.statusText ??= "Client Closed Request";
+  } catch {
+    // Ignore frozen/non-writable error objects.
+  }
+}
+
+/**
+ * Prevent dev-server console noise when Vite HMR / page reloads abort in-flight
+ * HTTP requests (Node emits `Error: aborted` with `ECONNRESET` from `abortIncoming`).
+ * Stamping HTTP 499 lets `@tanstack/start-server-core` recognize it as a handled
+ * client close instead of logging an unexpected 500 stack trace.
+ */
+function silenceClientAbortPlugin(): Plugin {
+  return {
+    name: "hrm:silence-client-abort",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const originalEmit = req.emit.bind(req) as IncomingMessage["emit"];
+        req.emit = ((event: string | symbol, ...args: unknown[]) => {
+          if (event === "error" && isNodeAbortError(args[0], req, res)) {
+            stampClientAbortMetadata(args[0]);
+          }
+          return originalEmit(event, ...args);
+        }) as IncomingMessage["emit"];
+
+        req.on("error", (err: unknown) => {
+          if (isNodeAbortError(err, req, res)) {
+            stampClientAbortMetadata(err);
+            return;
+          }
+          if (req.listenerCount("error") <= 1) {
+            throw err;
+          }
+        });
+
+        res.on("error", (err: unknown) => {
+          if (isNodeAbortError(err, req, res)) {
+            stampClientAbortMetadata(err);
+            return;
+          }
+          if (res.listenerCount("error") <= 1) {
+            throw err;
+          }
+        });
+
+        next();
+      });
+    },
+  };
+}
 
 export default defineConfig({
-  plugins: [],
+  plugins: [silenceClientAbortPlugin()],
   nitro: {
     preset: process.env["VERCEL"] ? "vercel" : "node-server",
     hooks: {
