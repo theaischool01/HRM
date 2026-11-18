@@ -18,7 +18,6 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AccessDenied, errorToAccessScreen } from "@/components/access-denied";
 import { AppShell } from "@/components/app-shell";
-import { HubSubNav, RECRUITMENT_HUB_TABS } from "@/components/hub-subnav";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -148,6 +147,7 @@ function CandidatesPage() {
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [hrFilter, setHrFilter] = useState<string>("all");
+  const [showFilters, setShowFilters] = useState(false);
 
   // Selection & bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -569,8 +569,6 @@ function CandidatesPage() {
         ) : undefined
       }
     >
-      <HubSubNav tabs={RECRUITMENT_HUB_TABS} />
-
       {data && !data.schemaReady && (
         <div className="mb-5 flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm">
           <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
@@ -590,29 +588,52 @@ function CandidatesPage() {
         </div>
       )}
 
-      {/* 8 Real DB-backed Recruitment KPIs */}
+      {/* DB-backed Recruitment KPIs */}
       {kpis && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 2xl:grid-cols-8">
-          {[
-            { label: "Total Candidates", value: kpis.totalCandidates },
-            { label: "New Applications", value: kpis.newApplications },
-            { label: "Shortlisted", value: kpis.shortlistedCandidates },
-            { label: "Interviews Sched.", value: kpis.interviewsScheduled },
-            { label: "Selected", value: kpis.selectedCandidates },
-            { label: "Offers Sent", value: kpis.offersSent },
-            { label: "Pending Onboarding", value: kpis.pendingOnboarding },
-            { label: "Conversion Rate", value: `${kpis.conversionRatePct}%` },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className="rounded-lg border border-border bg-card px-3 py-2.5"
-            >
-              <p className="leading-tight text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {item.label}
-              </p>
-              <p className="mt-1 font-mono text-lg font-bold text-foreground">{item.value}</p>
+        <div className="mb-5 space-y-2">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+            {[
+              { label: "Total Candidates", value: kpis.totalCandidates, highlight: false },
+              { label: "New Applications", value: kpis.newApplications, highlight: true },
+              { label: "Shortlisted", value: kpis.shortlistedCandidates, highlight: false },
+              { label: "Interviews Sched.", value: kpis.interviewsScheduled, highlight: false },
+              { label: "Selected", value: kpis.selectedCandidates, highlight: false },
+            ].map((item) => (
+              <div
+                key={item.label}
+                className="rounded-lg border border-border bg-card px-3.5 py-2.5 shadow-xs"
+              >
+                <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {item.label}
+                </p>
+                <p
+                  className={`mt-0.5 font-mono text-xl font-bold ${
+                    item.highlight ? "text-primary" : "text-foreground"
+                  }`}
+                >
+                  {item.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-1.5 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Pipeline Health & Conversion</span>
+            <div className="flex flex-wrap items-center gap-4">
+              <span>
+                Offers Sent:{" "}
+                <strong className="font-mono text-foreground">{kpis.offersSent}</strong>
+              </span>
+              <span>
+                Pending Onboarding:{" "}
+                <strong className="font-mono text-foreground">{kpis.pendingOnboarding}</strong>
+              </span>
+              <span>
+                Conversion Rate:{" "}
+                <strong className="font-mono text-foreground">{kpis.conversionRatePct}%</strong>
+              </span>
             </div>
-          ))}
+          </div>
         </div>
       )}
 
@@ -635,135 +656,186 @@ function CandidatesPage() {
         </TabsList>
 
         <TabsContent value="pipeline" className="space-y-4">
-          {/* Interactive Pipeline Stage Funnel Strip */}
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Pipeline stage filter">
-            <button
-              type="button"
-              aria-pressed={statusFilter === "all"}
-              onClick={() => setStatusFilter("all")}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                statusFilter === "all"
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-card text-foreground hover:bg-muted/60"
-              }`}
+          {/* Horizontal Scrollable Pipeline Funnel Strip */}
+          <div className="relative">
+            <div
+              className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pt-0.5 no-scrollbar scroll-smooth"
+              role="group"
+              aria-label="Pipeline stage filter"
             >
-              All Stages
-              <span className="font-mono text-[11px] opacity-80">({allCandidates.length})</span>
-            </button>
-            {[...CANDIDATE_PIPELINE_STAGES, ...CANDIDATE_SIDE_STATUSES].map((st) => {
-              const count = stageCounts[st] ?? 0;
-              const active = statusFilter === st;
-              return (
-                <button
-                  key={st}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setStatusFilter(active ? "all" : st)}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                  }`}
-                >
-                  {CANDIDATE_STATUS_LABELS[st]}
-                  <span className="font-mono text-[11px] opacity-80">({count})</span>
-                </button>
-              );
-            })}
+              <button
+                type="button"
+                aria-pressed={statusFilter === "all"}
+                onClick={() => setStatusFilter("all")}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  statusFilter === "all"
+                    ? "border-primary bg-primary text-primary-foreground font-semibold"
+                    : "border-border bg-card text-foreground hover:bg-muted/60"
+                }`}
+              >
+                All Stages
+                <span className="font-mono text-[11px] opacity-80">({allCandidates.length})</span>
+              </button>
+              {[...CANDIDATE_PIPELINE_STAGES, ...CANDIDATE_SIDE_STATUSES].map((st) => {
+                const count = stageCounts[st] ?? 0;
+                const active = statusFilter === st;
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setStatusFilter(active ? "all" : st)}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                      active
+                        ? "border-primary bg-primary text-primary-foreground font-semibold"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                    }`}
+                  >
+                    {CANDIDATE_STATUS_LABELS[st]}
+                    <span className="font-mono text-[11px] opacity-80">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Search & Filters */}
-          <Card>
-            <CardContent className="pt-4">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-                <div className="relative sm:col-span-2">
-                  <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-                  <Input
-                    aria-label="Search candidates"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search name, code, email, phone, designation, skills..."
-                    className="pl-8"
-                  />
-                </div>
-                <select
-                  aria-label="Filter by stage"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="all">All Pipeline Stages</option>
-                  {CANDIDATE_STATUSES.map((st) => (
-                    <option key={st} value={st}>
-                      {CANDIDATE_STATUS_LABELS[st]}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Filter by department"
-                  value={deptFilter}
-                  onChange={(e) => setDeptFilter(e.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="all">All Departments</option>
-                  {(data?.departments ?? []).map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                  <option value="none">Unassigned Department</option>
-                </select>
-                <select
-                  aria-label="Filter by source"
-                  value={sourceFilter}
-                  onChange={(e) => setSourceFilter(e.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="all">All Sources</option>
-                  {CANDIDATE_SOURCES.map((src) => (
-                    <option key={src} value={src}>
-                      {CANDIDATE_SOURCE_LABELS[src]}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Filter by HR"
-                  value={hrFilter}
-                  onChange={(e) => setHrFilter(e.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                >
-                  <option value="all">All HR Owners</option>
-                  {(data?.hrUsers ?? []).map((hr) => (
-                    <option key={hr.id} value={hr.id}>
-                      {hr.fullName}
-                    </option>
-                  ))}
-                </select>
+          {/* Search & Filters Toolbar */}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[200px] flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  aria-label="Search candidates"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, code, email, phone, designation, skills..."
+                  className="h-9 pl-8 text-sm"
+                />
               </div>
+
+              <select
+                aria-label="Filter by stage"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="h-9 min-w-[140px] rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="all">All Stages</option>
+                {CANDIDATE_STATUSES.map((st) => (
+                  <option key={st} value={st}>
+                    {CANDIDATE_STATUS_LABELS[st]}
+                  </option>
+                ))}
+              </select>
+
+              <Button
+                type="button"
+                variant={
+                  (deptFilter !== "all" || sourceFilter !== "all" || hrFilter !== "all")
+                    ? "default"
+                    : "outline"
+                }
+                size="sm"
+                className="h-9 gap-1.5"
+                onClick={() => setShowFilters((v) => !v)}
+              >
+                <Filter className="size-3.5" />
+                <span>Filters</span>
+                {(deptFilter !== "all" ? 1 : 0) +
+                  (sourceFilter !== "all" ? 1 : 0) +
+                  (hrFilter !== "all" ? 1 : 0) >
+                  0 && (
+                  <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px] font-bold">
+                    {(deptFilter !== "all" ? 1 : 0) +
+                      (sourceFilter !== "all" ? 1 : 0) +
+                      (hrFilter !== "all" ? 1 : 0)}
+                  </Badge>
+                )}
+              </Button>
+
               {hasActiveFilters && (
-                <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2.5 text-xs text-muted-foreground">
-                  <span>
-                    Showing <strong className="text-foreground">{filteredCandidates.length}</strong>{" "}
-                    of {allCandidates.length} candidate(s)
-                  </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setSearch("");
-                      setStatusFilter("all");
-                      setDeptFilter("all");
-                      setSourceFilter("all");
-                      setHrFilter("all");
-                    }}
-                  >
-                    Reset filters
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-9 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    setSearch("");
+                    setStatusFilter("all");
+                    setDeptFilter("all");
+                    setSourceFilter("all");
+                    setHrFilter("all");
+                  }}
+                >
+                  Reset
+                </Button>
               )}
-            </CardContent>
-          </Card>
+            </div>
+
+            {/* Collapsible Secondary Filters */}
+            {(showFilters ||
+              deptFilter !== "all" ||
+              sourceFilter !== "all" ||
+              hrFilter !== "all") && (
+              <div className="grid gap-2.5 rounded-lg border border-border/70 bg-muted/20 p-2.5 text-xs sm:grid-cols-3">
+                <div className="space-y-1">
+                  <span className="font-medium text-muted-foreground">Department</span>
+                  <select
+                    aria-label="Filter by department"
+                    value={deptFilter}
+                    onChange={(e) => setDeptFilter(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs"
+                  >
+                    <option value="all">All Departments</option>
+                    {(data?.departments ?? []).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                    <option value="none">Unassigned Department</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <span className="font-medium text-muted-foreground">Source</span>
+                  <select
+                    aria-label="Filter by source"
+                    value={sourceFilter}
+                    onChange={(e) => setSourceFilter(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs"
+                  >
+                    <option value="all">All Sources</option>
+                    {CANDIDATE_SOURCES.map((src) => (
+                      <option key={src} value={src}>
+                        {CANDIDATE_SOURCE_LABELS[src]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <span className="font-medium text-muted-foreground">HR Owner</span>
+                  <select
+                    aria-label="Filter by HR"
+                    value={hrFilter}
+                    onChange={(e) => setHrFilter(e.target.value)}
+                    className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs"
+                  >
+                    <option value="all">All HR Owners</option>
+                    {(data?.hrUsers ?? []).map((hr) => (
+                      <option key={hr.id} value={hr.id}>
+                        {hr.fullName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {hasActiveFilters && (
+              <p className="text-[11px] text-muted-foreground">
+                Showing <strong className="text-foreground">{filteredCandidates.length}</strong> of{" "}
+                {allCandidates.length} candidate(s)
+              </p>
+            )}
+          </div>
 
           {/* Bulk Action Bar */}
           {canManage && selectedIds.size > 0 && (

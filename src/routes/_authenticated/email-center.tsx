@@ -23,7 +23,14 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AccessDenied, errorToAccessScreen } from "@/components/access-denied";
 import { AppShell } from "@/components/app-shell";
-import { HubSubNav, RECRUITMENT_HUB_TABS } from "@/components/hub-subnav";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -74,6 +81,42 @@ export const Route = createFileRoute("/_authenticated/email-center")({
   loader: ({ context }) => context.queryClient.ensureQueryData(actorQueryOptions),
   component: EmailCenterPage,
 });
+
+const TEMPLATE_CATEGORIES: { id: string; label: string; slugs: string[] }[] = [
+  {
+    id: "recruitment",
+    label: "Recruitment",
+    slugs: [
+      "application_received",
+      "candidate_shortlisted",
+      "interview_invitation",
+      "interview_rescheduled",
+      "interview_reminder",
+      "candidate_rejection",
+      "candidate_selection",
+    ],
+  },
+  {
+    id: "offers",
+    label: "Offers & Contracts",
+    slugs: ["offer_letter", "offer_acceptance"],
+  },
+  {
+    id: "onboarding",
+    label: "Onboarding & KYC",
+    slugs: [
+      "onboarding_invitation",
+      "document_reminder",
+      "employee_welcome",
+      "document_correction_request",
+    ],
+  },
+  {
+    id: "communications",
+    label: "Communications",
+    slugs: ["hr_announcement", "work_related_notice"],
+  },
+];
 
 type ComposeMode = "individual" | "bulk" | "test";
 type LogFilter =
@@ -164,6 +207,8 @@ function EmailCenterPage() {
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
   const [verifyingSmtp, setVerifyingSmtp] = useState(false);
+  const [editorTab, setEditorTab] = useState<"visual" | "code">("visual");
+  const [selectedMsgForDetails, setSelectedMsgForDetails] = useState<any | null>(null);
 
   const data = centerQuery.data;
   const templates = data?.templates ?? [];
@@ -453,8 +498,6 @@ function EmailCenterPage() {
         </Button>
       }
     >
-      <HubSubNav tabs={RECRUITMENT_HUB_TABS} />
-
       {/* Schema Readiness Notice */}
       {data && !data.schemaReady ? (
         <Card className="mb-4 border-amber-500/40 bg-amber-500/5">
@@ -465,7 +508,7 @@ function EmailCenterPage() {
                 Phase P2 Email Tables Pending Migration Approval
               </p>
               <p className="text-muted-foreground">
-                All 12 default HR templates are loaded for live variable validation and
+                All 15 default HR templates are loaded for live variable validation and
                 preview. Persistent template edits, drafts, and audit logs will activate
                 once{" "}
                 <code className="text-xs">
@@ -478,20 +521,15 @@ function EmailCenterPage() {
         </Card>
       ) : null}
 
-      {/* Email Provider Readiness Gate */}
+      {/* Email Provider Readiness Indicator */}
       {data ? (
         providerConfigured ? (
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-xs">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-xs shadow-xs">
             <div className="flex items-center gap-2">
-              <CheckCircle2 className="size-4 text-emerald-600" />
-              <span>
-                <strong className="text-foreground">Hostinger SMTP Transport Ready</strong>{" "}
-                —{" "}
-                <code className="font-mono">
-                  {data.providerStatus.smtpHost}:{data.providerStatus.smtpPort}
-                </code>{" "}
-                ({data.providerStatus.smtpSecure ? "SSL/TLS" : "STARTTLS"}) from{" "}
-                <code className="font-mono">{data.providerStatus.senderDisplay}</code>.
+              <span className="flex size-2 rounded-full bg-emerald-500 ring-2 ring-emerald-500/20" />
+              <span className="font-semibold text-foreground">Email Service Connected</span>
+              <span className="hidden text-muted-foreground sm:inline">
+                · Hostinger SMTP ({data.providerStatus.senderDisplay})
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -499,14 +537,40 @@ function EmailCenterPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  className="h-7 text-xs"
                   onClick={() => void handleVerifySmtp()}
                   disabled={verifyingSmtp}
                 >
-                  <RefreshCw className="mr-1.5 size-3" />
-                  {verifyingSmtp ? "Verifying..." : "Verify SMTP Connection"}
+                  <RefreshCw className="mr-1 size-3" />
+                  {verifyingSmtp ? "Verifying..." : "Verify Connection"}
                 </Button>
               ) : null}
-              <Badge variant="secondary">Hostinger SMTP</Badge>
+              <details className="relative text-[11px] text-muted-foreground">
+                <summary className="cursor-pointer font-medium hover:text-foreground">
+                  Server Details
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 w-72 rounded-md border bg-popover p-2.5 text-xs shadow-md">
+                  <p className="mb-1 font-semibold text-foreground">Hostinger SMTP Settings</p>
+                  <p className="text-muted-foreground">
+                    Host:{" "}
+                    <code className="font-mono text-foreground">
+                      {data.providerStatus.smtpHost}:{data.providerStatus.smtpPort}
+                    </code>
+                  </p>
+                  <p className="text-muted-foreground">
+                    Security:{" "}
+                    <code className="font-mono text-foreground">
+                      {data.providerStatus.smtpSecure ? "SSL/TLS" : "STARTTLS"}
+                    </code>
+                  </p>
+                  <p className="text-muted-foreground">
+                    From:{" "}
+                    <code className="font-mono text-foreground">
+                      {data.providerStatus.senderDisplay}
+                    </code>
+                  </p>
+                </div>
+              </details>
             </div>
           </div>
         ) : (
@@ -562,36 +626,49 @@ function EmailCenterPage() {
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB 1: 12 EDITABLE TEMPLATES */}
+        {/* TAB 1: 15 EDITABLE TEMPLATES GROUPED BY CATEGORY */}
         <TabsContent value="templates" className="space-y-4">
           <div className="grid gap-5 lg:grid-cols-12">
-            {/* Left Template Selector */}
+            {/* Left Template Selector Grouped by Category */}
             <Card className="lg:col-span-4">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Standard HR Templates</CardTitle>
                 <CardDescription>
-                  Select any lifecycle template to inspect or customize.
+                  15 standardized templates organized by lifecycle stage.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-1.5">
-                {templates.map((tpl) => {
-                  const selected = tpl.slug === activeTemplate?.slug;
+              <CardContent className="space-y-4">
+                {TEMPLATE_CATEGORIES.map((cat) => {
+                  const catTemplates = templates.filter((t) => cat.slugs.includes(t.slug));
+                  if (catTemplates.length === 0) return null;
                   return (
-                    <button
-                      key={tpl.slug}
-                      type="button"
-                      onClick={() => setSelectedSlug(tpl.slug)}
-                      className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-xs transition-colors ${
-                        selected
-                          ? "border-primary bg-primary/5 font-semibold text-foreground"
-                          : "border-border/60 bg-card text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                      }`}
-                    >
-                      <span className="truncate pr-2">{tpl.name}</span>
-                      <Badge variant="outline" className="shrink-0 text-[10px] capitalize">
-                        {tpl.category}
-                      </Badge>
-                    </button>
+                    <div key={cat.id} className="space-y-1.5">
+                      <p className="px-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                        {cat.label} ({catTemplates.length})
+                      </p>
+                      <div className="space-y-1">
+                        {catTemplates.map((tpl) => {
+                          const selected = tpl.slug === activeTemplate?.slug;
+                          return (
+                            <button
+                              key={tpl.slug}
+                              type="button"
+                              onClick={() => setSelectedSlug(tpl.slug)}
+                              className={`flex w-full items-center justify-between rounded-md border px-2.5 py-1.5 text-left text-xs transition-colors ${
+                                selected
+                                  ? "border-primary bg-primary/10 font-semibold text-primary"
+                                  : "border-border/60 bg-card text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                              }`}
+                            >
+                              <span className="truncate pr-1.5">{tpl.name}</span>
+                              <code className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                                {tpl.slug}
+                              </code>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
               </CardContent>
@@ -638,27 +715,31 @@ function EmailCenterPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {/* Supported Dynamic Variables Bar */}
-                  <div className="rounded-lg border border-border bg-muted/30 p-3">
-                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  {/* Clean Dynamic Variables Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                       <Sparkles className="size-3.5 text-primary" />
-                      Supported Dynamic Variables{" "}
-                      {canManageTemplates ? "(click to append to HTML body)" : ""}
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {SUPPORTED_EMAIL_VARIABLES.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          title={EMAIL_VARIABLE_DESCRIPTIONS[v]}
-                          disabled={!canManageTemplates}
-                          onClick={() => insertVariableIntoHtml(v)}
-                          className="rounded border border-border bg-background px-2 py-0.5 font-mono text-[11px] text-foreground hover:border-primary disabled:cursor-default"
-                        >
-                          {`{{${v}}}`}
-                        </button>
-                      ))}
+                      <span className="font-medium text-foreground">Dynamic Placeholders</span>
                     </div>
+                    {canManageTemplates && (
+                      <select
+                        aria-label="Insert dynamic variable"
+                        value=""
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            insertVariableIntoHtml(e.target.value as EmailVariableKey);
+                          }
+                        }}
+                        className="h-8 rounded-md border border-input bg-background px-2.5 font-medium text-xs text-foreground"
+                      >
+                        <option value="">+ Insert Variable into HTML...</option>
+                        {SUPPORTED_EMAIL_VARIABLES.map((v) => (
+                          <option key={v} value={v}>
+                            {`{{${v}}}`} — {EMAIL_VARIABLE_DESCRIPTIONS[v]}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
 
                   {!editorValidation.valid ? (
@@ -669,7 +750,7 @@ function EmailCenterPage() {
                           .map((v) => `{{${v}}}`)
                           .join(", ")}
                       </strong>
-                      . Use only the supported variables listed above.
+                      . Use only supported placeholders.
                     </div>
                   ) : null}
 
@@ -694,29 +775,48 @@ function EmailCenterPage() {
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label htmlFor="tpl-html">HTML Body Template</Label>
-                    <Textarea
-                      id="tpl-html"
-                      rows={6}
-                      value={tplBodyHtml}
-                      disabled={!canManageTemplates}
-                      onChange={(e) => setTplBodyHtml(e.target.value)}
-                      className="font-mono text-xs"
-                    />
-                  </div>
+                  <Tabs
+                    value={editorTab}
+                    onValueChange={(v) => setEditorTab(v as any)}
+                    className="w-full"
+                  >
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="visual">HTML Body Template</TabsTrigger>
+                      <TabsTrigger value="code">Plain-Text Fallback</TabsTrigger>
+                    </TabsList>
 
-                  <div className="space-y-1.5">
-                    <Label htmlFor="tpl-text">Plain-Text Fallback Template</Label>
-                    <Textarea
-                      id="tpl-text"
-                      rows={4}
-                      value={tplBodyText}
-                      disabled={!canManageTemplates}
-                      onChange={(e) => setTplBodyText(e.target.value)}
-                      className="font-mono text-xs"
-                    />
-                  </div>
+                    <TabsContent value="visual" className="space-y-2 pt-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tpl-html" className="text-xs">
+                          HTML Body (Formatted layout)
+                        </Label>
+                        <Textarea
+                          id="tpl-html"
+                          rows={6}
+                          value={tplBodyHtml}
+                          disabled={!canManageTemplates}
+                          onChange={(e) => setTplBodyHtml(e.target.value)}
+                          className="font-mono text-xs"
+                        />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="code" className="space-y-2 pt-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tpl-text" className="text-xs">
+                          Plain-Text Fallback Template (Used by non-HTML email clients)
+                        </Label>
+                        <Textarea
+                          id="tpl-text"
+                          rows={6}
+                          value={tplBodyText}
+                          disabled={!canManageTemplates}
+                          onChange={(e) => setTplBodyText(e.target.value)}
+                          className="font-mono text-xs"
+                        />
+                      </div>
+                    </TabsContent>
+                  </Tabs>
                 </CardContent>
               </Card>
 
@@ -1283,33 +1383,52 @@ function EmailCenterPage() {
                               {statusDisplayLabel(msg.status)}
                             </Badge>
                           </td>
-                          <td className="py-3 pr-3">{msg.attempts}</td>
-                          <td className="max-w-xs py-3 pr-3">
+                          <td className="py-3 pr-3 font-mono">{msg.attempts}</td>
+                          <td className="max-w-[200px] py-3 pr-3">
                             {msg.error_message ? (
-                              <span className="text-rose-600 dark:text-rose-400">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedMsgForDetails(msg)}
+                                className="block max-w-[180px] truncate text-left font-mono text-destructive hover:underline"
+                                title="Click to view full error"
+                              >
                                 {msg.error_message}
-                              </span>
+                              </button>
                             ) : msg.provider_message_id ? (
-                              <code className="text-[11px] text-muted-foreground">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedMsgForDetails(msg)}
+                                className="block max-w-[180px] truncate text-left font-mono text-muted-foreground hover:text-foreground hover:underline"
+                                title="Click to view message ID"
+                              >
                                 {msg.provider_message_id}
-                              </code>
+                              </button>
                             ) : (
                               <span className="text-muted-foreground">—</span>
                             )}
                           </td>
-                          <td className="py-3 pr-3 whitespace-nowrap text-muted-foreground">
+                          <td className="whitespace-nowrap py-3 pr-3 font-mono text-muted-foreground">
                             {new Date(msg.sent_at ?? msg.created_at).toLocaleString(
                               "en-IN",
-                              { timeZone: "Asia/Kolkata" },
+                              { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" },
                             )}
                           </td>
                           <td className="py-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => setSelectedMsgForDetails(msg)}
+                              >
+                                Details
+                              </Button>
                               {canSendEmails &&
                               (msg.status === "failed" || msg.status === "draft") ? (
                                 <Button
                                   size="sm"
                                   variant="outline"
+                                  className="h-7 text-xs"
                                   disabled={!providerConfigured || retryingId === msg.id}
                                   onClick={() => handleRetryMessage(msg.id)}
                                 >
@@ -1323,7 +1442,7 @@ function EmailCenterPage() {
                                       ? "Sending..."
                                       : "Retrying..."
                                     : msg.status === "draft"
-                                      ? "Send Draft"
+                                      ? "Send"
                                       : "Retry"}
                                 </Button>
                               ) : null}
@@ -1332,10 +1451,11 @@ function EmailCenterPage() {
                                 <Button
                                   size="sm"
                                   variant="ghost"
+                                  className="h-7 px-2 text-xs text-muted-foreground"
                                   disabled={cancelingId === msg.id}
                                   onClick={() => handleCancelMessage(msg.id)}
                                 >
-                                  {cancelingId === msg.id ? "Canceling..." : "Cancel"}
+                                  {cancelingId === msg.id ? "..." : "Cancel"}
                                 </Button>
                               ) : null}
                             </div>
@@ -1409,6 +1529,86 @@ function EmailCenterPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Email Message Technical Details Modal */}
+      <Dialog
+        open={Boolean(selectedMsgForDetails)}
+        onOpenChange={(open) => !open && setSelectedMsgForDetails(null)}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Email Dispatch Details</DialogTitle>
+            <DialogDescription>
+              Technical delivery metadata recorded by The AI School SMTP relay.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedMsgForDetails && (
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1.5 rounded-md border bg-muted/20 p-3 font-mono">
+                <div>
+                  <span className="text-muted-foreground">Recipient: </span>
+                  <span className="font-semibold text-foreground">
+                    {selectedMsgForDetails.recipient_name} &lt;
+                    {selectedMsgForDetails.recipient_email}&gt;
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Subject: </span>
+                  <span className="text-foreground">{selectedMsgForDetails.subject}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Template: </span>
+                  <span className="text-foreground">
+                    {selectedMsgForDetails.template_slug || "Custom"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Status: </span>
+                  <Badge
+                    variant={statusBadgeVariant(selectedMsgForDetails.status)}
+                    className="ml-1"
+                  >
+                    {statusDisplayLabel(selectedMsgForDetails.status)}
+                  </Badge>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Attempts: </span>
+                  <span className="text-foreground">{selectedMsgForDetails.attempts}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Recorded At: </span>
+                  <span className="text-foreground">
+                    {new Date(selectedMsgForDetails.created_at).toLocaleString("en-IN", {
+                      timeZone: "Asia/Kolkata",
+                    })}
+                  </span>
+                </div>
+                {selectedMsgForDetails.provider_message_id && (
+                  <div>
+                    <span className="text-muted-foreground">SMTP Message ID: </span>
+                    <span className="break-all text-foreground">
+                      {selectedMsgForDetails.provider_message_id}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {selectedMsgForDetails.error_message && (
+                <div className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-3">
+                  <p className="font-semibold text-destructive">Error Diagnostic</p>
+                  <pre className="whitespace-pre-wrap font-mono text-[11px] text-destructive">
+                    {selectedMsgForDetails.error_message}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setSelectedMsgForDetails(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

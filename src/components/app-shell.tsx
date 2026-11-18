@@ -254,7 +254,7 @@ export function AppShell({
                 {title}
               </h1>
               {description ? (
-                <p className="line-clamp-1 text-xs text-muted-foreground sm:text-sm">
+                <p className="text-xs text-muted-foreground sm:text-sm">
                   {description}
                 </p>
               ) : null}

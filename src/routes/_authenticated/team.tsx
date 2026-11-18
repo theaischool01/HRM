@@ -1,539 +1,608 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Download, X } from "lucide-react";
+import { useState, useMemo } from "react";
+import {
+  Download,
+  RefreshCw,
+  Search,
+  Filter,
+  CheckCircle2,
+  AlertTriangle,
+  Clock,
+  Coffee,
+  UserCheck,
+  UserX,
+  Users,
+  LogOut,
+  ChevronDown,
+  X,
+  FileSpreadsheet,
+} from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
-import { HubSubNav, OVERSIGHT_HUB_TABS } from "@/components/hub-subnav";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
-import { OVERSIGHT_CSV_COLUMNS, OversightTable } from "@/components/oversight-table";
-import { getOversight, listReviewEvents, listTeamEods, reviewEodReport } from "@/lib/oversight.functions";
-import { listTeamBlockers, resolveBlocker } from "@/lib/daily.functions";
-import type { OversightRow } from "@/lib/oversight.server";
-import { downloadCsv, toCsv } from "@/lib/csv";
-import { REVIEW_ACTION_LABELS, optionsOf } from "@/lib/enums";
+import { AttendanceMonitoringTable } from "@/components/attendance/attendance-monitoring-table";
+import { EmployeeAttendanceDrawer } from "@/components/attendance/employee-attendance-drawer";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+  exportAttendanceCsv,
+  exportAttendanceXlsx,
+} from "@/lib/attendance/attendance-export";
+import { getOversight, listReviewEvents, reviewEodReport } from "@/lib/oversight.functions";
+import { resolveBlocker } from "@/lib/daily.functions";
+import type { OversightRow } from "@/lib/oversight.server";
+import { todayIso, daysAgoIso } from "@/lib/timezone";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export const Route = createFileRoute("/_authenticated/team")({
   head: () => ({
     meta: [
-      { title: "Team review | The AI School HRM" },
+      { title: "Attendance & Break Monitoring | The AI School HRM" },
       {
         name: "description",
         content:
-          "Lead view of team attendance, productivity against real project targets, and EOD review actions.",
+          "Track daily check-ins, punctuality, breaks, late returns and attendance compliance.",
       },
-      { property: "og:title", content: "Team review | The AI School HRM" },
+      { property: "og:title", content: "Attendance & Break Monitoring | The AI School HRM" },
       {
         property: "og:description",
-        content: "Review your team's day, approve EOD reports and export the same numbers.",
+        content:
+          "Track daily check-ins, punctuality, breaks, late returns and attendance compliance.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
   }),
   loader: ({ context }) => context.queryClient.ensureQueryData(actorQueryOptions),
-  component: TeamPage,
+  component: TeamAttendanceMonitoringPage,
   errorComponent: ({ error }) => errorToAccessScreen(error),
 });
 
-const ACTION_OPTIONS = optionsOf(REVIEW_ACTION_LABELS);
-const HIGH_IMPACT_EOD_ACTIONS = new Set(["escalated", "performance_concern"]);
+type DatePreset = "today" | "yesterday" | "last_7_days" | "last_14_days" | "custom";
 
-function eodBadgeVariant(
-  status: string,
-): "success" | "info" | "warning" | "destructive" | "neutral" {
-  if (status === "reviewed" || status === "approved" || status === "approved_with_comment") {
-    return "success";
-  }
-  if (status === "submitted") return "info";
-  if (status === "revision_required" || status === "revision_requested") return "warning";
-  if (status === "escalated" || status === "performance_concern") return "destructive";
-  return "neutral";
-}
-
-function formatIstDateTime(iso: string): string {
-  return `${new Date(iso).toLocaleString("en-IN", {
-    timeZone: "Asia/Kolkata",
-    dateStyle: "medium",
-    timeStyle: "short",
-  })} IST`;
-}
-
-function TeamPage() {
+function TeamAttendanceMonitoringPage() {
   const actor = useActor();
   const queryClient = useQueryClient();
   const canReviewEod = actor.can("eod:review:team");
   const canManageBlockers = actor.can("blockers:manage:team");
 
-  const [range, setRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
-  const activeRange =
-    range.from && range.to ? { from: range.from, to: range.to } : {};
+  // Date range state
+  const todayStr = useMemo(() => todayIso(new Date()), []);
+  const [preset, setPreset] = useState<DatePreset>("today");
+  const [range, setRange] = useState<{ from: string; to: string }>({
+    from: todayStr,
+    to: todayStr,
+  });
 
-  const { data } = useSuspenseQuery({
-    queryKey: ["oversight", "team", range.from || "default", range.to || "default"],
+  function applyPreset(p: DatePreset) {
+    setPreset(p);
+    const now = new Date();
+    if (p === "today") {
+      setRange({ from: todayIso(now), to: todayIso(now) });
+    } else if (p === "yesterday") {
+      const y = daysAgoIso(1, now);
+      setRange({ from: y, to: y });
+    } else if (p === "last_7_days") {
+      setRange({ from: daysAgoIso(6, now), to: todayIso(now) });
+    } else if (p === "last_14_days") {
+      setRange({ from: daysAgoIso(13, now), to: todayIso(now) });
+    }
+  }
+
+  const activeRange = useMemo(() => {
+    return range.from && range.to ? { from: range.from, to: range.to } : {};
+  }, [range.from, range.to]);
+
+  // Query oversight data
+  const { data, refetch, isFetching } = useSuspenseQuery({
+    queryKey: ["oversight", "monitoring", range.from, range.to],
     queryFn: () => getOversight({ data: activeRange }),
   });
-  const { data: eods } = useSuspenseQuery({
-    queryKey: ["team-eods", range.from || "default", range.to || "default"],
-    queryFn: () => listTeamEods({ data: activeRange }),
-  });
-  const { data: teamBlockers = [] } = useQuery({
-    queryKey: ["team-blockers"],
-    queryFn: () => listTeamBlockers(),
-    enabled: canManageBlockers,
-  });
-  const [selected, setSelected] = useState<OversightRow | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, { action: string; note: string }>>({});
-  const [blockerNotes, setBlockerNotes] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [confirmEod, setConfirmEod] = useState<{
-    id: string;
-    personName: string;
-    workDate: string;
-    action: string;
-    note: string;
-  } | null>(null);
 
-  const { data: events = [], isLoading: eventsLoading } = useQuery({
-    queryKey: ["review-events", selected?.userId],
-    queryFn: () => listReviewEvents({ data: { userId: selected!.userId } }),
-    enabled: !!selected,
+  // Selected employee for Slide-over detail drawer
+  const [selectedRow, setSelectedRow] = useState<OversightRow | null>(null);
+
+  // Filter state
+  const [search, setSearch] = useState<string>("");
+  const [departmentFilter, setDepartmentFilter] = useState<string>("all");
+  const [quickStatusFilter, setQuickStatusFilter] = useState<string>("all");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [workTypeFilter, setWorkTypeFilter] = useState<string>("all");
+  const [breakFilter, setBreakFilter] = useState<string>("all");
+
+  // Review events for the selected employee
+  const { data: reviewEvents = [], isLoading: eventsLoading } = useQuery({
+    queryKey: ["review-events", selectedRow?.userId],
+    queryFn: () => listReviewEvents({ data: { userId: selectedRow!.userId } }),
+    enabled: Boolean(selectedRow?.userId),
   });
 
-  async function review(id: string) {
-    const draft = drafts[id] ?? { action: "approved", note: "" };
-    setBusy(id);
+  // Distinct departments for filter dropdown
+  const departmentOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of data.rows) {
+      if (r.departmentName) set.add(r.departmentName);
+    }
+    return Array.from(set).sort();
+  }, [data.rows]);
+
+  // Filtered rows matching search & all filter dropdowns
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return data.rows.filter((row) => {
+      // Search match
+      if (q) {
+        const nameMatch = row.fullName.toLowerCase().includes(q);
+        const codeMatch = row.employeeCode?.toLowerCase().includes(q);
+        const emailMatch = row.workEmail?.toLowerCase().includes(q);
+        if (!nameMatch && !codeMatch && !emailMatch) return false;
+      }
+
+      // Department filter
+      if (departmentFilter !== "all" && row.departmentName !== departmentFilter) {
+        return false;
+      }
+
+      // Quick Attendance status filter
+      if (quickStatusFilter === "on_time" && row.arrivalStatus !== "on_time") return false;
+      if (quickStatusFilter === "late" && row.arrivalStatus !== "late") return false;
+      if (quickStatusFilter === "on_break" && !row.hasActiveBreak) return false;
+      if (quickStatusFilter === "checked_out" && !row.checkOutAt) return false;
+      if (quickStatusFilter === "missing_check_in" && row.arrivalStatus !== "missing_check_in")
+        return false;
+
+      // Role filter
+      if (roleFilter !== "all" && row.role !== roleFilter) return false;
+
+      // Work type filter
+      if (workTypeFilter !== "all" && row.workType !== workTypeFilter) return false;
+
+      // Break status filter
+      if (breakFilter === "lunch" && row.breakStatus !== "on_lunch") return false;
+      if (breakFilter === "short" && row.breakStatus !== "on_short_break") return false;
+      if (breakFilter === "late_return" && row.breakStatus !== "late_return") return false;
+      if (breakFilter === "overdue" && row.breakStatus !== "overdue" && row.breakOvertimeMinutes === 0)
+        return false;
+
+      return true;
+    });
+  }, [
+    data.rows,
+    search,
+    departmentFilter,
+    quickStatusFilter,
+    roleFilter,
+    workTypeFilter,
+    breakFilter,
+  ]);
+
+  const hasActiveFilters =
+    search.trim() !== "" ||
+    departmentFilter !== "all" ||
+    quickStatusFilter !== "all" ||
+    roleFilter !== "all" ||
+    workTypeFilter !== "all" ||
+    breakFilter !== "all";
+
+  function clearFilters() {
+    setSearch("");
+    setDepartmentFilter("all");
+    setQuickStatusFilter("all");
+    setRoleFilter("all");
+    setWorkTypeFilter("all");
+    setBreakFilter("all");
+  }
+
+  // EOD Review Handler
+  async function handleReviewEod(id: string, action: string, note: string) {
     try {
-      await reviewEodReport({ data: { id, action: draft.action, note: draft.note || null } });
-      toast.success(`Recorded: ${REVIEW_ACTION_LABELS[draft.action as never] ?? draft.action}.`);
-      setConfirmEod(null);
+      await reviewEodReport({ data: { id, action, note: note || null } });
+      toast.success("Review decision recorded successfully.");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-eods"] }),
-        queryClient.invalidateQueries({ queryKey: ["oversight", "team"] }),
+        queryClient.invalidateQueries({ queryKey: ["oversight"] }),
+        queryClient.invalidateQueries({ queryKey: ["review-events"] }),
       ]);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not record the review.");
-    } finally {
-      setBusy(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to record review decision.");
+      throw err;
     }
   }
 
-  async function handleResolveBlocker(id: string) {
-    setBusy(`blocker-${id}`);
+  // Blocker Resolve Handler
+  async function handleResolveBlocker(id: string, note: string) {
     try {
-      await resolveBlocker({
-        data: { id, note: blockerNotes[id]?.trim() || null },
-      });
-      toast.success("Blocker resolved and employee notified.");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-blockers"] }),
-        queryClient.invalidateQueries({ queryKey: ["oversight", "team"] }),
-      ]);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not resolve blocker.");
-    } finally {
-      setBusy(null);
+      await resolveBlocker({ data: { id, note: note || null } });
+      toast.success("Blocker resolved.");
+      await queryClient.invalidateQueries({ queryKey: ["oversight"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to resolve blocker.");
+      throw err;
     }
   }
 
-  function exportCsv() {
-    downloadCsv(
-      `team-attendance-${data.filter.from}-to-${data.filter.to}.csv`,
-      toCsv(data.rows, OVERSIGHT_CSV_COLUMNS),
-    );
-  }
+  const { summary } = data;
 
   return (
     <AppShell
-      title="Team review"
-      description={`${data.filter.from} → ${data.filter.to} · ${data.summary.people} people · ${data.summary.days} days`}
+      title="Attendance & Break Monitoring"
+      description="Track daily check-ins, working hours, breaks and attendance compliance."
       actions={
-        <Button size="sm" variant="outline" onClick={exportCsv}>
-          <Download className="mr-1.5 size-4" /> Export CSV
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Refresh */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-9 gap-1.5 text-xs"
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            <RefreshCw className={`size-3.5 ${isFetching ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+
+          {/* Export Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-9 gap-1.5 text-xs">
+                <Download className="size-3.5" />
+                Export
+                <ChevronDown className="size-3.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onClick={() => exportAttendanceCsv(filteredRows, range.from, range.to)}
+              >
+                <Download className="mr-2 size-4" />
+                Export CSV ({filteredRows.length})
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => exportAttendanceXlsx(filteredRows, range.from, range.to)}
+              >
+                <FileSpreadsheet className="mr-2 size-4" />
+                Export Excel (.xlsx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       }
     >
-      <HubSubNav tabs={OVERSIGHT_HUB_TABS} />
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
-            <Label htmlFor="team-from" className="text-xs text-muted-foreground">
-              From date
-            </Label>
-            <Input
-              id="team-from"
-              type="date"
-              className="h-9 w-40"
-              value={range.from || data.filter.from}
-              onChange={(e) =>
-                setRange((r) => ({ from: e.target.value, to: r.to || data.filter.to }))
-              }
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="team-to" className="text-xs text-muted-foreground">
-              To date
-            </Label>
-            <Input
-              id="team-to"
-              type="date"
-              className="h-9 w-40"
-              value={range.to || data.filter.to}
-              onChange={(e) =>
-                setRange((r) => ({ from: r.from || data.filter.from, to: e.target.value }))
-              }
-            />
-          </div>
-          {(range.from || range.to) ? (
+      <div className="space-y-5">
+        {/* Date presets and Custom Range bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3 shadow-2xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-semibold text-muted-foreground mr-1">Period:</span>
             <Button
               size="sm"
-              variant="ghost"
-              onClick={() => setRange({ from: "", to: "" })}
+              variant={preset === "today" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => applyPreset("today")}
             >
-              Reset range
+              Today
             </Button>
-          ) : null}
+            <Button
+              size="sm"
+              variant={preset === "yesterday" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => applyPreset("yesterday")}
+            >
+              Yesterday
+            </Button>
+            <Button
+              size="sm"
+              variant={preset === "last_7_days" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => applyPreset("last_7_days")}
+            >
+              Last 7 Days
+            </Button>
+            <Button
+              size="sm"
+              variant={preset === "last_14_days" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => applyPreset("last_14_days")}
+            >
+              Last 14 Days
+            </Button>
+            <Button
+              size="sm"
+              variant={preset === "custom" ? "default" : "ghost"}
+              className="h-7 text-xs px-2.5"
+              onClick={() => setPreset("custom")}
+            >
+              Custom
+            </Button>
+          </div>
+
+          {preset === "custom" && (
+            <div className="flex items-center gap-2">
+              <Input
+                type="date"
+                className="h-8 w-36 text-xs"
+                value={range.from}
+                onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
+              />
+              <span className="text-xs text-muted-foreground">to</span>
+              <Input
+                type="date"
+                className="h-8 w-36 text-xs"
+                value={range.to}
+                onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
+              />
+            </div>
+          )}
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Worked hours" value={`${data.summary.workedHours}h`} />
-          <Stat label="Units completed" value={data.summary.unitsCompleted} />
-          <Stat
-            label="Avg target achievement"
-            value={
-              data.summary.avgAchievementPct != null ? `${data.summary.avgAchievementPct}%` : "—"
-            }
-          />
-          <Stat label="Days needing attention" value={data.summary.problemDays} />
+        {/* COMPACT 8-CARD WORKFORCE KPI STRIP */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+          {/* 1. Total Expected */}
+          <div className="rounded-lg border bg-card p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Expected</span>
+              <Users className="size-3.5 text-muted-foreground/70" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-foreground mt-2">
+              {summary.expectedTotal}
+            </p>
+            <span className="text-[10px] text-muted-foreground mt-0.5">Active Workforce</span>
+          </div>
+
+          {/* 2. Checked In */}
+          <div className="rounded-lg border bg-card p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Checked In</span>
+              <UserCheck className="size-3.5 text-blue-600" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-foreground mt-2">
+              {summary.checkedInCount}
+            </p>
+            <span className="text-[10px] text-muted-foreground mt-0.5">
+              {summary.expectedTotal > 0
+                ? `${Math.round((summary.checkedInCount / summary.expectedTotal) * 100)}% attendance`
+                : "0%"}
+            </span>
+          </div>
+
+          {/* 3. On-Time Arrivals */}
+          <div className="rounded-lg border border-emerald-200/60 bg-emerald-50/20 dark:border-emerald-900/40 dark:bg-emerald-950/20 p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-emerald-700 dark:text-emerald-400">
+              <span className="text-[11px] font-medium uppercase tracking-wider">On-Time</span>
+              <CheckCircle2 className="size-3.5 text-emerald-600" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-emerald-700 dark:text-emerald-400 mt-2">
+              {summary.onTimeArrivals}
+            </p>
+            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 mt-0.5">
+              ≤ 10:00 AM IST
+            </span>
+          </div>
+
+          {/* 4. Late Arrivals */}
+          <div className="rounded-lg border border-amber-200/60 bg-amber-50/20 dark:border-amber-900/40 dark:bg-amber-950/20 p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-amber-700 dark:text-amber-400">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Late</span>
+              <AlertTriangle className="size-3.5 text-amber-600" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-amber-700 dark:text-amber-400 mt-2">
+              {summary.lateArrivals}
+            </p>
+            <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 mt-0.5">
+              &gt; 10:00 AM IST
+            </span>
+          </div>
+
+          {/* 5. Currently On Break */}
+          <div className="rounded-lg border bg-card p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-wider">On Break</span>
+              <Coffee className="size-3.5 text-blue-600" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-blue-600 mt-2">
+              {summary.currentlyOnBreak}
+            </p>
+            <span className="text-[10px] text-muted-foreground mt-0.5">Live Open Breaks</span>
+          </div>
+
+          {/* 6. Overdue / Late Breaks */}
+          <div className="rounded-lg border border-rose-200/60 bg-rose-50/20 dark:border-rose-900/40 dark:bg-rose-950/20 p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-rose-700 dark:text-rose-400">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Overdue</span>
+              <AlertTriangle className="size-3.5 text-rose-600" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-rose-700 dark:text-rose-400 mt-2">
+              {summary.overdueBreaks}
+            </p>
+            <span className="text-[10px] text-rose-600/80 dark:text-rose-400/80 mt-0.5">
+              Break Violations
+            </span>
+          </div>
+
+          {/* 7. Checked Out */}
+          <div className="rounded-lg border bg-card p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Checked Out</span>
+              <LogOut className="size-3.5 text-muted-foreground/70" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-foreground mt-2">
+              {summary.checkedOutCount}
+            </p>
+            <span className="text-[10px] text-muted-foreground mt-0.5">Completed Shifts</span>
+          </div>
+
+          {/* 8. Missing Check-Ins */}
+          <div className="rounded-lg border bg-card p-3 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="text-[11px] font-medium uppercase tracking-wider">Missing</span>
+              <UserX className="size-3.5 text-muted-foreground/70" />
+            </div>
+            <p className="text-xl font-bold tracking-tight text-foreground mt-2">
+              {summary.missingCheckIns}
+            </p>
+            <span className="text-[10px] text-muted-foreground mt-0.5">Unrecorded</span>
+          </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Team days</CardTitle>
-            <CardDescription>
-              Select a row to drill into that person&apos;s review history. Every figure comes from
-              the same derivation used by the export.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <OversightTable
-              rows={data.rows}
-              onSelect={setSelected}
-              selectedDayId={selected?.dayId}
-            />
-          </CardContent>
-        </Card>
+        {/* PRIMARY SEARCH & FILTER BAR */}
+        <div className="space-y-3 rounded-lg border bg-card p-4 shadow-2xs">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                placeholder="Search by employee name, TAS ID, or email..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-9 pl-9 text-xs"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3.5" />
+                </button>
+              )}
+            </div>
 
-        {selected ? (
-          <Card>
-            <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-2 space-y-0">
-              <div className="space-y-1">
-                <CardTitle className="text-base">{selected.fullName} — review history</CardTitle>
-                <CardDescription>
-                  {selected.workDate} · {selected.status.replace(/_/g, " ")} ·{" "}
-                  {selected.achievement.unitsCompleted} units ·{" "}
-                  {selected.achievement.dailyAchievementPct != null
-                    ? `${selected.achievement.dailyAchievementPct}% of target`
-                    : "no target set"}
-                </CardDescription>
-              </div>
+            {/* Quick Department & Quick Status Filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Department Dropdown */}
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-xs text-foreground focus:ring-1 focus:ring-primary"
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+              >
+                <option value="all">All Departments</option>
+                {departmentOptions.map((dept) => (
+                  <option key={dept} value={dept}>
+                    {dept}
+                  </option>
+                ))}
+              </select>
+
+              {/* Quick Attendance Status */}
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-xs text-foreground focus:ring-1 focus:ring-primary"
+                value={quickStatusFilter}
+                onChange={(e) => setQuickStatusFilter(e.target.value)}
+              >
+                <option value="all">All Attendance</option>
+                <option value="on_time">On-Time Arrival</option>
+                <option value="late">Late Arrival</option>
+                <option value="on_break">Currently On Break</option>
+                <option value="checked_out">Checked Out</option>
+                <option value="missing_check_in">Missing Check-In</option>
+              </select>
+
+              {/* Advanced Filters Toggle */}
               <Button
                 size="sm"
-                variant="ghost"
-                aria-label="Close review history"
-                onClick={() => setSelected(null)}
+                variant={showAdvancedFilters ? "secondary" : "outline"}
+                className="h-9 gap-1.5 text-xs"
+                onClick={() => setShowAdvancedFilters((v) => !v)}
               >
-                <X className="mr-1 size-4" /> Close
+                <Filter className="size-3.5" />
+                Filters
+                {hasActiveFilters && (
+                  <span className="size-1.5 rounded-full bg-primary" />
+                )}
               </Button>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {eventsLoading ? (
-                <p className="text-muted-foreground">Loading review history…</p>
-              ) : events.length === 0 ? (
-                <p className="text-muted-foreground">No review actions recorded yet.</p>
-              ) : null}
-              {events.map((event) => (
-                <div key={event.id} className="rounded-md border p-2.5">
-                  <p className="font-medium">
-                    {REVIEW_ACTION_LABELS[event.action as never] ?? event.action} ·{" "}
-                    <span className="capitalize">{event.entity_type.replace(/_/g, " ")}</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {(event.profiles as { full_name?: string } | null)?.full_name ?? "Reviewer"} ·{" "}
-                    {formatIstDateTime(event.created_at)}
-                    {event.note ? ` · “${event.note}”` : ""}
-                  </p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">EOD reports</CardTitle>
-            <CardDescription>
-              Approve, approve with comment, request revision, escalate or flag a performance
-              concern — each action records you and the time in IST.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {eods.reports.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No EOD reports in this range.</p>
-            ) : null}
-            {eods.reports.map((report) => {
-              const draft = drafts[report.id] ?? { action: "approved", note: "" };
-              const person = report.profiles as { full_name?: string } | null;
-              return (
-                <div key={report.id} className="space-y-2.5 rounded-md border p-3 text-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-medium">
-                      {person?.full_name ?? "Team member"} ·{" "}
-                      <span className="tabular-nums">{report.work_date}</span>
-                    </p>
-                    <Badge variant={eodBadgeVariant(report.status)} className="capitalize">
-                      {report.status.replace(/_/g, " ")}
-                    </Badge>
-                  </div>
-                  <p className="text-muted-foreground">{report.highlights}</p>
-                  {report.reviewed_at ? (
-                    <p className="text-xs text-muted-foreground">
-                      Last reviewed {formatIstDateTime(report.reviewed_at)}
-                      {report.review_note ? ` · “${report.review_note}”` : ""}
-                    </p>
-                  ) : null}
-                  {report.events.length > 0 ? (
-                    <ul className="space-y-0.5 text-xs text-muted-foreground">
-                      {report.events.map((event) => (
-                        <li key={event.id}>
-                          {REVIEW_ACTION_LABELS[event.action as never] ?? event.action} ·{" "}
-                          {(event.profiles as { full_name?: string } | null)?.full_name ?? "—"} ·{" "}
-                          {formatIstDateTime(event.created_at)}
-                          {event.note ? ` · “${event.note}”` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {canReviewEod ? (
-                    <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:flex-wrap sm:items-end">
-                      <div className="space-y-1 sm:w-52">
-                        <Label
-                          htmlFor={`eod-action-${report.id}`}
-                          className="text-xs text-muted-foreground"
-                        >
-                          Decision
-                        </Label>
-                        <select
-                          id={`eod-action-${report.id}`}
-                          className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                          value={draft.action}
-                          onChange={(e) =>
-                            setDrafts({
-                              ...drafts,
-                              [report.id]: { ...draft, action: e.target.value },
-                            })
-                          }
-                        >
-                          {ACTION_OPTIONS.map((o) => (
-                            <option key={o.value} value={o.value}>
-                              {o.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="space-y-1 sm:min-w-48 sm:flex-1">
-                        <Label
-                          htmlFor={`eod-note-${report.id}`}
-                          className="text-xs text-muted-foreground"
-                        >
-                          Comment
-                        </Label>
-                        <Input
-                          id={`eod-note-${report.id}`}
-                          placeholder="Review note (recommended for revisions/escalations)"
-                          value={draft.note}
-                          onChange={(e) =>
-                            setDrafts({
-                              ...drafts,
-                              [report.id]: { ...draft, note: e.target.value },
-                            })
-                          }
-                        />
-                      </div>
-                      <Button
-                        size="sm"
-                        variant={HIGH_IMPACT_EOD_ACTIONS.has(draft.action) ? "destructive" : "default"}
-                        disabled={busy === report.id}
-                        onClick={() => {
-                          if (HIGH_IMPACT_EOD_ACTIONS.has(draft.action)) {
-                            setConfirmEod({
-                              id: report.id,
-                              personName: person?.full_name ?? "this employee",
-                              workDate: report.work_date,
-                              action: draft.action,
-                              note: draft.note,
-                            });
-                          } else {
-                            void review(report.id);
-                          }
-                        }}
-                      >
-                        {busy === report.id ? "Saving…" : "Record action"}
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
+              {/* Clear filters button */}
+              {hasActiveFilters && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-9 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={clearFilters}
+                >
+                  Reset
+                </Button>
+              )}
+            </div>
+          </div>
 
-        {canManageBlockers ? (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Team blockers</CardTitle>
-              <CardDescription>
-                Open and recently resolved blockers raised by your direct reports or project team.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {teamBlockers.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No blockers raised in this range.</p>
-              ) : null}
-              {teamBlockers.map((b) => {
-                const workDate =
-                  (b.attendance_days as { work_date?: string } | null)?.work_date ?? "—";
-                return (
-                  <div key={b.id} className="space-y-2.5 rounded-md border p-3 text-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2 font-medium">
-                        <span>
-                          {b.authorName} · <span className="tabular-nums">{workDate}</span> ·{" "}
-                          <span className="capitalize">{b.category.replace(/_/g, " ")}</span>
-                        </span>
-                        <Badge
-                          variant={
-                            b.severity === "critical" || b.severity === "high"
-                              ? "destructive"
-                              : b.severity === "medium"
-                                ? "warning"
-                                : "neutral"
-                          }
-                          className="capitalize"
-                        >
-                          {b.severity}
-                        </Badge>
-                      </div>
-                      <Badge
-                        variant={b.status === "resolved" ? "success" : "warning"}
-                        className="capitalize"
-                      >
-                        {b.status}
-                      </Badge>
-                    </div>
-                    <p className="text-muted-foreground">{b.description}</p>
-                    {b.resolution_note ? (
-                      <p className="text-xs text-muted-foreground">
-                        Resolution note: “{b.resolution_note}”
-                      </p>
-                    ) : null}
-                    {b.status !== "resolved" ? (
-                      <div className="flex flex-col gap-2 pt-1 sm:flex-row sm:flex-wrap sm:items-end">
-                        <div className="space-y-1 sm:min-w-48 sm:flex-1">
-                          <Label
-                            htmlFor={`blocker-note-${b.id}`}
-                            className="text-xs text-muted-foreground"
-                          >
-                            Resolution note (optional)
-                          </Label>
-                          <Input
-                            id={`blocker-note-${b.id}`}
-                            placeholder="How was this unblocked?"
-                            value={blockerNotes[b.id] ?? ""}
-                            onChange={(e) =>
-                              setBlockerNotes((prev) => ({ ...prev, [b.id]: e.target.value }))
-                            }
-                          />
-                        </div>
-                        <Button
-                          size="sm"
-                          disabled={busy === `blocker-${b.id}`}
-                          onClick={() => handleResolveBlocker(b.id)}
-                        >
-                          {busy === `blocker-${b.id}` ? "Resolving…" : "Resolve blocker"}
-                        </Button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </CardContent>
-          </Card>
-        ) : null}
+          {/* COLLAPSIBLE ADVANCED FILTERS */}
+          {showAdvancedFilters && (
+            <div className="pt-3 border-t grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <Label className="text-[11px] text-muted-foreground block mb-1">Workforce Role</Label>
+                <select
+                  className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground"
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value)}
+                >
+                  <option value="all">All Roles</option>
+                  <option value="employee">Employee</option>
+                  <option value="lead">Team Lead</option>
+                  <option value="manager">Manager</option>
+                  <option value="hr">HR</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-[11px] text-muted-foreground block mb-1">Work Type</Label>
+                <select
+                  className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground"
+                  value={workTypeFilter}
+                  onChange={(e) => setWorkTypeFilter(e.target.value)}
+                >
+                  <option value="all">All Work Types</option>
+                  <option value="annotation">Annotation Staff</option>
+                  <option value="operations">General Operations</option>
+                </select>
+              </div>
+
+              <div>
+                <Label className="text-[11px] text-muted-foreground block mb-1">Break Compliance</Label>
+                <select
+                  className="h-8 w-full rounded-md border border-input bg-background px-2.5 text-xs text-foreground"
+                  value={breakFilter}
+                  onChange={(e) => setBreakFilter(e.target.value)}
+                >
+                  <option value="all">All Break Statuses</option>
+                  <option value="lunch">On Lunch Break</option>
+                  <option value="short">On Short Break</option>
+                  <option value="late_return">Late Returns</option>
+                  <option value="overdue">Overdue Breaks</option>
+                </select>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* MAIN ATTENDANCE MONITORING TABLE */}
+        <AttendanceMonitoringTable
+          rows={filteredRows}
+          onSelectEmployee={(row) => setSelectedRow(row)}
+          selectedDayId={selectedRow?.dayId ?? null}
+          onReviewEod={(row) => setSelectedRow(row)}
+        />
+
+        {/* SLIDE-OVER EMPLOYEE DETAIL DRAWER */}
+        <EmployeeAttendanceDrawer
+          row={selectedRow}
+          isOpen={Boolean(selectedRow)}
+          onClose={() => setSelectedRow(null)}
+          canReviewEod={canReviewEod}
+          canManageBlockers={canManageBlockers}
+          onReviewEodReport={handleReviewEod}
+          onResolveBlocker={handleResolveBlocker}
+          reviewEvents={reviewEvents}
+          isEventsLoading={eventsLoading}
+        />
       </div>
-
-      <AlertDialog open={Boolean(confirmEod)} onOpenChange={(o) => !o && setConfirmEod(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Confirm {REVIEW_ACTION_LABELS[confirmEod?.action as never] ?? confirmEod?.action}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              You are recording{" "}
-              <span className="font-medium text-foreground">
-                {REVIEW_ACTION_LABELS[confirmEod?.action as never] ?? confirmEod?.action}
-              </span>{" "}
-              on <span className="font-medium text-foreground">{confirmEod?.personName}</span>&apos;s
-              EOD report for <span className="tabular-nums">{confirmEod?.workDate}</span>. This
-              writes to the permanent review audit log and notifies operational leadership.
-              {!confirmEod?.note.trim() ? (
-                <span className="mt-2 block font-medium text-warning">
-                  Note: You have not entered a comment explaining this escalation/flag.
-                </span>
-              ) : null}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={Boolean(busy)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={Boolean(busy)}
-              onClick={(e) => {
-                e.preventDefault();
-                if (confirmEod) void review(confirmEod.id);
-              }}
-            >
-              {busy ? "Recording…" : "Confirm & record"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </AppShell>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-2xl font-semibold tabular-nums">{value}</p>
-        <p className="text-xs text-muted-foreground">{label}</p>
-      </CardContent>
-    </Card>
   );
 }

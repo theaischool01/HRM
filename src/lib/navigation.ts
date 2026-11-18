@@ -143,7 +143,7 @@ export function buildRoleNavigation(
     if (canOversight) {
       items.push({
         to: "/team",
-        label: "Attendance & Delivery",
+        label: "Attendance & Breaks",
         iconKey: "oversight",
         matchPrefixes: ["/team"],
       });
@@ -238,7 +238,7 @@ export function buildRoleNavigation(
     if (canOversight) {
       teamItems.push({
         to: "/team",
-        label: "Attendance & EODs",
+        label: "Attendance & Breaks",
         iconKey: "oversight",
         matchPrefixes: ["/team"],
       });
@@ -362,7 +362,7 @@ export function buildRoleNavigation(
     if (canOversight) {
       oversightItems.push({
         to: "/team",
-        label: "Attendance & EODs",
+        label: "Attendance & Breaks",
         iconKey: "oversight",
         matchPrefixes: ["/team", "/reviews"],
       });
@@ -430,7 +430,7 @@ export function buildRoleNavigation(
   if (canOversight) {
     deliveryItems.push({
       to: "/team",
-      label: "Delivery & Oversight",
+      label: "Attendance & Breaks",
       iconKey: "oversight",
       matchPrefixes: ["/team", "/reviews"],
     });

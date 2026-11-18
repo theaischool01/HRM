@@ -5,6 +5,7 @@ import { Check, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { evaluatePasswordPolicy } from "@/lib/password-policy";
+import { completeAccountSetup } from "@/lib/onboarding.functions";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,10 @@ function ResetPasswordPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Account-setup links (from HR) wait for an explicit click so mail scanners cannot consume them. */
+  const [isSetupLink, setIsSetupLink] = useState(false);
+  const [awaitingContinue, setAwaitingContinue] = useState(false);
+  const [continueAttempt, setContinueAttempt] = useState(0);
 
   const policy = evaluatePasswordPolicy(password, confirmPassword);
 
@@ -40,11 +45,18 @@ function ResetPasswordPage() {
         const code = url.searchParams.get("code");
         const tokenHash = url.searchParams.get("token_hash");
         const queryType = url.searchParams.get("type");
+        const setupFlag = url.searchParams.get("setup") === "1";
         const urlError =
           url.searchParams.get("error_description") || url.searchParams.get("error");
 
         if (urlError) {
           throw new Error(urlError);
+        }
+
+        if (setupFlag) setIsSetupLink(true);
+        if (setupFlag && tokenHash && continueAttempt === 0) {
+          if (!cancelled) setAwaitingContinue(true);
+          return;
         }
 
         if (code) {
@@ -56,6 +68,8 @@ function ResetPasswordPage() {
             type: queryType as EmailOtpType,
           });
           if (error) throw error;
+          // Remove the consumed one-time token from the address bar / history.
+          window.history.replaceState(null, "", url.pathname);
         }
 
         const { data, error } = await supabase.auth.getSession();
@@ -66,11 +80,17 @@ function ResetPasswordPage() {
           );
         }
 
-        if (!cancelled) setReady(true);
+        if (!cancelled) {
+          setAwaitingContinue(false);
+          setReady(true);
+        }
       } catch (err) {
         if (!cancelled) {
+          setAwaitingContinue(false);
           setSessionError(
-            err instanceof Error ? err.message : "Could not validate password reset link.",
+            err instanceof Error
+              ? `${err.message} This link may have expired or already been used — ask HR for a new setup email or use Forgot password.`
+              : "Could not validate password reset link.",
           );
         }
       }
@@ -80,7 +100,7 @@ function ResetPasswordPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [continueAttempt]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -94,10 +114,15 @@ function ResetPasswordPage() {
 
     setBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password });
-      if (error) throw error;
+      if (isSetupLink) {
+        // Sets the password and records "account setup confirmed" atomically on the server.
+        await completeAccountSetup({ data: { newPassword: password } });
+      } else {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+      }
 
-      toast.success("Your password has been updated.");
+      toast.success(isSetupLink ? "Your account is set up." : "Your password has been updated.");
       navigate({ to: "/dashboard", replace: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not update password.";
@@ -117,7 +142,9 @@ function ResetPasswordPage() {
         <CardHeader className="space-y-3">
           <Logo className="h-8" />
           <div>
-            <CardTitle className="font-display text-xl">Set a new password</CardTitle>
+            <CardTitle className="font-display text-xl">
+              {isSetupLink ? "Set up your HRM account" : "Set a new password"}
+            </CardTitle>
             <CardDescription>
               Choose a strong password for your work account before continuing.
             </CardDescription>
@@ -134,6 +161,20 @@ function ResetPasswordPage() {
               </p>
               <Button asChild className="w-full">
                 <Link to="/auth">Back to sign in</Link>
+              </Button>
+            </div>
+          ) : awaitingContinue ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Welcome to The AI School. Continue to verify your secure, single-use setup link
+                and choose your password.
+              </p>
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => setContinueAttempt((n) => n + 1)}
+              >
+                Continue to set my password
               </Button>
             </div>
           ) : !ready ? (

@@ -32,6 +32,7 @@ import {
   resolveWorkLead,
   todayIso,
 } from "./daily-queries.server";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 export type CheckInInput = {
   workMode: "wfo" | "wfh" | "hybrid" | "client_location" | "field_work";
@@ -112,31 +113,43 @@ export const getMyDay = createServerFn({ method: "POST" })
         allocations,
         achievement: null,
         hourlyLogging,
+        breakRequests: [],
       };
     }
 
-    const [{ data: entries }, { data: breaks }, { data: blockers }, { data: eod }] =
-      await Promise.all([
-        supabase
-          .from("task_entries")
-          .select(`${ENTRY_SELECT}, projects(code, name, task_unit)`)
-          .eq("day_id", day.id)
-          .order("started_at"),
-        supabase.from("break_logs").select("*").eq("day_id", day.id).order("started_at"),
-        supabase
-          .from("blockers")
-          .select("*, projects(code, name)")
-          .eq("day_id", day.id)
-          .order("started_at"),
-
-        supabase.from("eod_reports").select("*").eq("day_id", day.id).maybeSingle(),
-      ]);
+    const [
+      { data: entries },
+      { data: breaks },
+      { data: blockers },
+      { data: eod },
+      breakRequestsResult,
+    ] = await Promise.all([
+      supabase
+        .from("task_entries")
+        .select(`${ENTRY_SELECT}, projects(code, name, task_unit)`)
+        .eq("day_id", day.id)
+        .order("started_at"),
+      supabase.from("break_logs").select("*").eq("day_id", day.id).order("started_at"),
+      supabase
+        .from("blockers")
+        .select("*, projects(code, name)")
+        .eq("day_id", day.id)
+        .order("started_at"),
+      supabase.from("eod_reports").select("*").eq("day_id", day.id).maybeSingle(),
+      (supabaseAdmin as any)
+        .from("break_requests")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("work_date", workDate)
+        .order("created_at", { ascending: false }),
+    ]);
+    const breakRequests = (breakRequestsResult as any)?.data || [];
 
     const metrics = await loadMetrics(supabase, day.id);
     const status = await loadStatus(supabase, day.id);
 
-    const approved = (entries ?? []).reduce((sum, e) => sum + Number(e.units_approved ?? 0), 0);
-    const rejected = (entries ?? []).reduce((sum, e) => sum + Number(e.units_rejected ?? 0), 0);
+    const approved = (entries ?? []).reduce((sum: number, e: any) => sum + Number(e.units_approved ?? 0), 0);
+    const rejected = (entries ?? []).reduce((sum: number, e: any) => sum + Number(e.units_rejected ?? 0), 0);
 
     const achievement = computeTargetAchievement({
       taskMinutes: metrics.taskMinutes,
@@ -159,9 +172,9 @@ export const getMyDay = createServerFn({ method: "POST" })
         const { loadProfileNames, nameOf } = await import("./profile-names.server");
         const leadNames = await loadProfileNames(
           supabase,
-          (blockers ?? []).map((b) => b.notified_lead_id),
+          (blockers ?? []).map((b: any) => b.notified_lead_id),
         );
-        return (blockers ?? []).map((b) => ({
+        return (blockers ?? []).map((b: any) => ({
           ...b,
           profiles: b.notified_lead_id
             ? { full_name: nameOf(leadNames, b.notified_lead_id) }
@@ -173,6 +186,7 @@ export const getMyDay = createServerFn({ method: "POST" })
       allocations,
       achievement: hourlyLogging.eodMode === "annotation" ? achievement : null,
       hourlyLogging,
+      breakRequests,
     };
   });
 
@@ -483,35 +497,25 @@ export const deleteTaskEntry = createServerFn({ method: "POST" })
 
 export const startBreak = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .validator((input: { category: string; note?: string | null }) => {
-    if (!input?.category) throw new Error("Pick a break type.");
-    return input;
-  })
+  .validator(
+    (input: {
+      category: string;
+      note?: string | null;
+      requestId?: string | null;
+    }) => {
+      if (!input?.category) throw new Error("Pick a break type.");
+      return input;
+    },
+  )
   .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
-    const day = await loadDay(supabase, userId, todayIso());
-    if (!day?.check_in_at) throw new Error("Check in before taking a break.");
-    const { data: open } = await supabase
-      .from("break_logs")
-      .select("id")
-      .eq("day_id", day.id)
-      .is("ended_at", null)
-      .maybeSingle();
-    if (open) throw new Error("You already have a break running.");
-
-    const { data: row, error } = await supabase
-      .from("break_logs")
-      .insert({
-        day_id: day.id,
-        user_id: userId,
-        category: data.category as never,
-        started_at: new Date().toISOString(),
-        note: data.note?.trim() || null,
-      })
-      .select("*")
-      .single();
-    if (error) throw error;
-    return { break: row };
+    const { startBreakStrict } = await import("./breaks.functions");
+    return await startBreakStrict({
+      data: {
+        category: data.category as any,
+        requestId: data.requestId,
+      },
+      context,
+    } as any);
   });
 
 export const endBreak = createServerFn({ method: "POST" })
@@ -521,15 +525,8 @@ export const endBreak = createServerFn({ method: "POST" })
     return input;
   })
   .handler(async ({ data, context }) => {
-    const { data: row, error } = await context.supabase
-      .from("break_logs")
-      .update({ ended_at: new Date().toISOString() })
-      .eq("id", data.id)
-      .eq("user_id", context.userId)
-      .select("*")
-      .single();
-    if (error) throw error;
-    return { break: row };
+    const { endBreakStrict } = await import("./breaks.functions");
+    return await endBreakStrict({ data, context } as any);
   });
 
 export const raiseBlocker = createServerFn({ method: "POST" })
@@ -999,3 +996,11 @@ export const markNotificationRead = createServerFn({ method: "POST" })
     if (error) throw error;
     return { ok: true };
   });
+
+export {
+  requestPersonalizedBreak,
+  cancelPersonalizedBreak,
+  decidePersonalizedBreak,
+  listPersonalizedBreakRequests,
+} from "./breaks.functions";
+

@@ -49,6 +49,7 @@ import {
   startBreak,
   submitTaskEntry,
 } from "@/lib/daily.functions";
+import { BreakTracker } from "@/components/breaks/break-tracker";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -384,15 +385,24 @@ function MyDayPage() {
         ))}
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlarmClock className="size-4" /> Attendance
-            </CardTitle>
+      <div className="space-y-6">
+        {/* 1. Daily Attendance & Hourly Activity Logging */}
+        <div className="grid gap-5 lg:grid-cols-3">
+          <Card className={canLogHourly || day.entries.length > 0 ? "lg:col-span-1" : "lg:col-span-3"}>
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <AlarmClock className="size-4" /> Attendance
+              </CardTitle>
+              {(!canLogHourly && day.entries.length === 0) && (
+                <Badge variant={dayStatusBadgeVariant(day.status)}>
+                  {checkedOut ? "Shift Completed" : (ATTENDANCE_STATUS_LABELS[day.status] ?? day.status)}
+                </Badge>
+              )}
+            </div>
             <CardDescription>
               {checkInFree
-                ? "Personal workday attendance and break tracking."
+                ? "Personal workday attendance, hours and break tracking."
                 : "Check-in is only open for assignments you have acknowledged."}
             </CardDescription>
           </CardHeader>
@@ -408,13 +418,13 @@ function MyDayPage() {
               </p>
             )}
             {allocations.length === 0 && checkInFree && (
-              <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+              <div className="rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">Personal Attendance Mode:</span> Personal
                 presence tracking. Project task targets are not required for personal check-in.
               </div>
             )}
             {!checkedIn ? (
-              <div className="space-y-3">
+              <div className="space-y-3 max-w-xl">
                 <div className="space-y-1.5">
                   <Label htmlFor="work-mode">Work mode</Label>
                   <select
@@ -450,73 +460,88 @@ function MyDayPage() {
                   />
                 </div>
                 <Button
-                  className="w-full"
+                  className="w-full sm:w-auto font-medium"
                   disabled={busy === "check-in" || (allocations.length === 0 && !checkInFree)}
                   onClick={doCheckIn}
                 >
-                  <LogIn className="size-4" /> Check in
+                  <LogIn className="mr-1.5 size-4" /> Check in
                 </Button>
               </div>
             ) : (
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Checked in</span>
-                  <span className="font-medium">{timeOf(day.day!.check_in_at)}</span>
+              <div className="space-y-4">
+                <div className={`grid gap-3 rounded-lg border border-border/70 bg-muted/20 p-3.5 text-xs ${canLogHourly || day.entries.length > 0 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4"}`}>
+                  <div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Checked In</span>
+                    <p className="font-semibold text-sm text-foreground">{timeOf(day.day!.check_in_at)}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Checked Out</span>
+                    <p className="font-semibold text-sm text-foreground">{checkedOut ? timeOf(day.day!.check_out_at) : "In progress"}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Attended</span>
+                    <p className="font-semibold text-sm text-foreground">{metrics ? hhmm(metrics.workedMinutes) : "0h 00m"}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Required</span>
+                    <p className="font-semibold text-sm text-foreground">{hhmm(day.day!.required_minutes ?? 0)}</p>
+                  </div>
+                  {metrics && (
+                    <>
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Breaks</span>
+                        <p className="font-semibold text-sm text-foreground">{hhmm(metrics.breakMinutes)}</p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Task Time</span>
+                        <p className="font-semibold text-sm text-foreground">{hhmm(metrics.taskMinutes)}</p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Blocked</span>
+                        <p className="font-semibold text-sm text-foreground">{hhmm(metrics.blockerMinutes)}</p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Uncovered</span>
+                        <p className={`font-semibold text-sm ${metrics.uncoveredMinutes > 60 ? "text-destructive font-bold" : "text-foreground"}`}>
+                          {hhmm(metrics.uncoveredMinutes)}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Checked out</span>
-                  <span className="font-medium">{timeOf(day.day!.check_out_at)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Required</span>
-                  <span className="font-medium">{hhmm(day.day!.required_minutes ?? 0)}</span>
-                </div>
-                {metrics && (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Attended</span>
-                      <span className="font-medium">{hhmm(metrics.workedMinutes)}</span>
+
+                {checkedOut ? (
+                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="size-4 text-emerald-600 shrink-0" />
+                      <span className="font-medium">Shift completed at {timeOf(day.day!.check_out_at)} IST</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Task time</span>
-                      <span className="font-medium">{hhmm(metrics.taskMinutes)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Breaks</span>
-                      <span className="font-medium">{hhmm(metrics.breakMinutes)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Blocked</span>
-                      <span className="font-medium">{hhmm(metrics.blockerMinutes)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Uncovered</span>
-                      <span
-                        className={
-                          metrics.uncoveredMinutes > 60 ? "font-semibold text-destructive" : "font-medium"
-                        }
-                      >
-                        {hhmm(metrics.uncoveredMinutes)}
-                      </span>
-                    </div>
-                  </>
-                )}
-                {!checkedOut && (
+                    <span className="font-semibold">{metrics ? hhmm(metrics.workedMinutes) : ""} attended</span>
+                  </div>
+                ) : (
                   <Button
                     variant="secondary"
-                    className="w-full"
+                    className="w-full sm:w-auto font-semibold"
                     disabled={busy === "check-out"}
                     onClick={() => setCheckoutConfirmOpen(true)}
                   >
-                    <LogOut className="size-4" /> Check out
+                    <LogOut className="mr-1.5 size-4" /> Check out
                   </Button>
+                )}
+
+                {(!canLogHourly && day.entries.length === 0) && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
+                    <span className="inline-block size-1.5 rounded-full bg-muted-foreground/60" />
+                    Hourly production logging is only required for Annotation team members.
+                  </p>
                 )}
               </div>
             )}
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-2">
+        {(canLogHourly || day.entries.length > 0) && (
+          <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base">Hourly annotation logs</CardTitle>
             <CardDescription>
@@ -954,73 +979,29 @@ function MyDayPage() {
             )}
           </CardContent>
         </Card>
+        )}
+      </div>
 
+      {/* 2. Daily Breaks Section — Full Width Approved Component */}
+      <BreakTracker
+        breaks={day.breaks as any}
+        breakRequests={(day as any).breakRequests ?? []}
+        checkedIn={checkedIn}
+        checkedOut={checkedOut}
+        workDate={day.workDate}
+        onRefresh={refresh}
+      />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Coffee className="size-4" /> Breaks
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {openBreak ? (
-              <Button
-                className="w-full"
-                variant="secondary"
-                disabled={busy === "break"}
-                onClick={() =>
-                  run("break", () => endBreak({ data: { id: openBreak.id } }), "Break ended.")
-                }
-              >
-                End {openBreak.category.replace("_", " ")} break
-              </Button>
-            ) : (
-              <div className="flex gap-2">
-                <select
-                  aria-label="Break type"
-                  className="h-9 flex-1 rounded-md border bg-background px-3 text-sm"
-                  value={breakCategory}
-                  onChange={(e) => setBreakCategory(e.target.value as BreakCategoryValue)}
-                >
-                  {BREAK_CATEGORIES.map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  disabled={busy === "break" || !checkedIn}
-                  onClick={() =>
-                    run(
-                      "break",
-                      () => startBreak({ data: { category: breakCategory } }),
-                      "Break started.",
-                    )
-                  }
-                >
-                  Start
-                </Button>
-              </div>
-            )}
-            <ul className="space-y-1 text-sm text-muted-foreground">
-              {day.breaks.map((b) => (
-                <li key={b.id}>
-                  {b.category.replace("_", " ")}: {timeOf(b.started_at)}–{timeOf(b.ended_at)}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <OctagonAlert className="size-4" /> Blockers
-            </CardTitle>
-            <CardDescription>
-              Raising a blocker notifies the reporting lead recorded on that allocation.
-            </CardDescription>
-          </CardHeader>
+      {/* 3. Blockers Section */}
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <OctagonAlert className="size-4" /> Blockers
+          </CardTitle>
+          <CardDescription>
+            Raising a blocker notifies the reporting lead recorded on that allocation.
+          </CardDescription>
+        </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="space-y-1">
@@ -1155,7 +1136,8 @@ function MyDayPage() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-3">
+      {/* 4. End of Day Report */}
+      <Card className="w-full">
           <CardHeader>
             <CardTitle className="text-base">End-of-day report</CardTitle>
             <CardDescription>

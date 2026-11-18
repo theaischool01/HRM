@@ -68,8 +68,8 @@ export const RECRUITMENT_HUB_TABS: HubTab[] = [
 ];
 
 export const ONBOARDING_HUB_TABS: HubTab[] = [
-  { to: "/invitations", label: "Invitation Queue & Single Invite", permission: "invitations:read:all" },
-  { to: "/roster-import", label: "Bulk Roster Import (CSV / Excel)", permission: "invitations:create:all" },
+  { to: "/invitations", label: "Add Single Employee", permission: "invitations:read:all" },
+  { to: "/roster-import", label: "Bulk Import (CSV / Excel)", permission: "invitations:create:all" },
 ];
 
 export const ORG_HUB_TABS: HubTab[] = [

@@ -16,6 +16,7 @@ import {
 } from "@/lib/requests.functions";
 import { REQUEST_STATUS_LABELS, REQUEST_TYPE_LABELS, optionsOf } from "@/lib/enums";
 import { todayIso } from "@/lib/timezone";
+import { PersonalizedBreakApprovalPanel } from "@/components/breaks/personalized-break-approval-panel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -306,6 +307,9 @@ function RequestsPage() {
               </CardContent>
             </Card>
           ) : null}
+
+          {/* HR Personalized Break Approval Queue */}
+          <PersonalizedBreakApprovalPanel />
 
           {canViewQueue ? (
             <Card>

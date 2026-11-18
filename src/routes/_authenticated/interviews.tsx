@@ -20,7 +20,6 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AccessDenied, errorToAccessScreen } from "@/components/access-denied";
 import { AppShell } from "@/components/app-shell";
-import { HubSubNav, RECRUITMENT_HUB_TABS } from "@/components/hub-subnav";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -544,8 +543,6 @@ function InterviewsWorkspacePage() {
         </div>
       }
     >
-      <HubSubNav tabs={RECRUITMENT_HUB_TABS} />
-
       {data && !data.schemaReady ? (
         <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
           <CardContent className="flex items-start gap-3 pt-6">
@@ -591,58 +588,53 @@ function InterviewsWorkspacePage() {
       ) : null}
 
       {/* Summary KPIs */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center justify-between">
-              <span>Upcoming Rounds</span>
-              <CalendarClock className="size-4 text-muted-foreground" />
-            </CardDescription>
-            <CardTitle className="text-2xl">{counts.upcoming}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            Scheduled or rescheduled slots (IST)
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center justify-between">
-              <span>Needs My Scorecard</span>
-              <ClipboardCheck className="size-4 text-amber-600" />
-            </CardDescription>
-            <CardTitle className="text-2xl">{counts.needsScorecard}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            Assigned rounds awaiting your evaluation
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center justify-between">
-              <span>Completed Rounds</span>
-              <CheckCircle2 className="size-4 text-emerald-600" />
-            </CardDescription>
-            <CardTitle className="text-2xl">{counts.completed}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            Completed interviews across pipeline
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center justify-between">
-              <span>Cancelled / No-Show</span>
-              <XCircle className="size-4 text-rose-600" />
-            </CardDescription>
-            <CardTitle className="text-2xl">{counts.cancelled}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            Cancelled slots or candidate non-attendance
-          </CardContent>
-        </Card>
+      <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          {
+            label: "Upcoming Rounds",
+            value: counts.upcoming,
+            icon: CalendarClock,
+            detail: "Scheduled slots (IST)",
+            iconColor: "text-muted-foreground",
+          },
+          {
+            label: "Needs My Scorecard",
+            value: counts.needsScorecard,
+            icon: ClipboardCheck,
+            detail: "Awaiting your evaluation",
+            iconColor: "text-amber-600 dark:text-amber-400",
+          },
+          {
+            label: "Completed Rounds",
+            value: counts.completed,
+            icon: CheckCircle2,
+            detail: "Completed across pipeline",
+            iconColor: "text-emerald-600 dark:text-emerald-400",
+          },
+          {
+            label: "Cancelled / No-Show",
+            value: counts.cancelled,
+            icon: XCircle,
+            detail: "Cancelled or non-attendance",
+            iconColor: "text-rose-600 dark:text-rose-400",
+          },
+        ].map((item) => (
+          <div
+            key={item.label}
+            className="flex flex-col justify-between rounded-lg border border-border bg-card p-3.5 shadow-xs"
+          >
+            <div className="flex items-center justify-between text-muted-foreground">
+              <span className="truncate text-[11px] font-semibold uppercase tracking-wider">
+                {item.label}
+              </span>
+              <item.icon className={`size-4 shrink-0 ${item.iconColor}`} />
+            </div>
+            <div className="mt-2">
+              <p className="font-mono text-2xl font-bold text-foreground">{item.value}</p>
+              <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{item.detail}</p>
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Filters & Search */}
@@ -692,14 +684,26 @@ function InterviewsWorkspacePage() {
           </CardContent>
         </Card>
       ) : filteredInterviews.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <p className="font-medium text-foreground">No interviews match this view</p>
-            <p className="mt-1 text-xs text-muted-foreground">
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-10 text-center">
+            <CalendarClock className="size-8 text-muted-foreground/60" />
+            <p className="mt-2 font-medium text-foreground">No interviews match this view</p>
+            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
               {canManage
                 ? "Schedule a round with an online meeting link or an active office location."
                 : "Assigned interviews will appear here automatically when HR schedules you on a panel."}
             </p>
+            {canManage && (
+              <Button
+                size="sm"
+                className="mt-4 gap-1.5"
+                onClick={openScheduleDialog}
+                disabled={!data?.schemaReady}
+              >
+                <Plus className="size-4" />
+                Schedule Interview
+              </Button>
+            )}
           </CardContent>
         </Card>
       ) : (

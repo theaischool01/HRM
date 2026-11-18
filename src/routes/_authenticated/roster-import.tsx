@@ -2,10 +2,17 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Download, Upload } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  FileSpreadsheet,
+  Lock,
+  UserPlus,
+} from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { AccessDenied, errorToAccessScreen } from "@/components/access-denied";
 import { HubSubNav, ONBOARDING_HUB_TABS } from "@/components/hub-subnav";
+import { OnboardedEmployeesPanel } from "@/components/onboarding/onboarded-employees-panel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,34 +30,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { runInvitationDispatch } from "@/lib/invitations.functions";
+import { downloadXlsx, type SheetRow } from "@/lib/xlsx-export";
 import {
-  ROSTER_COLUMNS,
-  TEMPLATE_SAMPLE_ROWS,
-  gridToRosterRaw,
-  type RosterRaw,
-  type RosterRow,
-} from "@/lib/roster-import";
+  ONBOARDING_TEMPLATE_HEADERS,
+  ONBOARDING_TEMPLATE_SAMPLE_ROWS,
+  gridToOnboardingRows,
+  isCreatableRow,
+  type OnboardingColumn,
+  type OnboardingRawRow,
+  type OnboardingSummary,
+  type ValidatedOnboardingRow,
+} from "@/lib/onboarding/employee-onboarding";
 import {
-  commitRosterImport,
-  validateRosterUpload,
-  type RosterCommitResult,
-} from "@/lib/roster-import.functions";
-import { downloadXlsx } from "@/lib/xlsx-export";
+  createOnboardedEmployees,
+  validateOnboardingBatch,
+  type CreateEmployeeResult,
+} from "@/lib/onboarding.functions";
 
 export const Route = createFileRoute("/_authenticated/roster-import")({
   head: () => ({
     meta: [
-      { title: "Roster Import | The AI School HRM" },
+      { title: "Bulk Employee Onboarding | The AI School HRM" },
       {
         name: "description",
         content:
-          "Bulk-invite employees from a CSV or Excel roster with row-level validation before anything is written.",
+          "Upload CSV or Excel files with the 8 standard onboarding columns to validate and provision employee accounts in bulk.",
       },
-      { property: "og:title", content: "Roster Import | The AI School HRM" },
+      { property: "og:title", content: "Bulk Employee Onboarding | The AI School HRM" },
       {
         property: "og:description",
-        content: "Validate and bulk-invite an employee roster in one pass.",
+        content: "Validate and provision employee accounts in bulk with explicit setup email dispatch.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -63,45 +72,37 @@ export const Route = createFileRoute("/_authenticated/roster-import")({
 
 type Filter = "all" | "error" | "warning";
 
-const TEMPLATE_ROWS = TEMPLATE_SAMPLE_ROWS.map((row) =>
-  Object.fromEntries(ROSTER_COLUMNS.map((col, i) => [col, row[i] ?? ""])),
-);
-
 function RosterImportPage() {
   useSuspenseQuery(actorQueryOptions);
   const actor = useActor();
   const [fileName, setFileName] = useState("");
-  const [raw, setRaw] = useState<RosterRaw[]>([]);
-  const [rows, setRows] = useState<RosterRow[] | null>(null);
-  const [summary, setSummary] = useState<{
-    total: number;
-    valid: number;
-    warning: number;
-    error: number;
-    importable: number;
-  } | null>(null);
+  const [rawRows, setRawRows] = useState<OnboardingRawRow[]>([]);
+  const [rows, setRows] = useState<ValidatedOnboardingRow[] | null>(null);
+  const [summary, setSummary] = useState<OnboardingSummary | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [busy, setBusy] = useState(false);
   const [confirmCommitOpen, setConfirmCommitOpen] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
-  const [result, setResult] = useState<{
-    created: number;
-    skipped: number;
-    failed: number;
-    results: RosterCommitResult[];
-  } | null>(null);
+  const [lastResults, setLastResults] = useState<CreateEmployeeResult[] | null>(null);
+  const [panelRefreshSignal, setPanelRefreshSignal] = useState(0);
+
+  const errorCount = useMemo(() => {
+    if (!summary) return 0;
+    return summary.invalid + summary.duplicate + summary.unauthorized_role;
+  }, [summary]);
 
   const visible = useMemo(() => {
     if (!rows) return [];
     if (filter === "all") return rows;
-    return rows.filter((r) => r.severity === filter);
+    if (filter === "warning") return rows.filter((r) => r.status === "warning");
+    return rows.filter((r) => r.status !== "valid" && r.status !== "warning");
   }, [rows, filter]);
 
-  if (!actor.can("workforce:create:all") || !actor.can("invitations:create:all")) {
+  if (!actor.can("workforce:create:all") && !actor.can("invitations:create:all")) {
     return (
       <AccessDenied
         kind="forbidden"
-        detail="Bulk employee imports are available to Super Admin, Admin and HR only."
+        detail="Bulk employee onboarding is restricted to authorized HR and Administrator accounts."
       />
     );
   }
@@ -109,18 +110,22 @@ function RosterImportPage() {
   function downloadTemplate(kind: "csv" | "xlsx") {
     if (kind === "csv") {
       downloadCsv(
-        "employee_roster_template.csv",
+        "employee_onboarding_template.csv",
         toCsv(
-          TEMPLATE_ROWS,
-          ROSTER_COLUMNS.map((c) => ({
+          ONBOARDING_TEMPLATE_SAMPLE_ROWS as unknown as Record<string, string>[],
+          ONBOARDING_TEMPLATE_HEADERS.map((c) => ({
             key: c,
             header: c,
-            value: (r: Record<string, string>) => r[c],
+            value: (r: Record<string, string>) => r[c] ?? "",
           })),
         ),
       );
     } else {
-      void downloadXlsx("employee_roster_template.xlsx", "Roster", TEMPLATE_ROWS);
+      void downloadXlsx(
+        "employee_onboarding_template.xlsx",
+        "Onboarding",
+        ONBOARDING_TEMPLATE_SAMPLE_ROWS as unknown as SheetRow[],
+      );
     }
   }
 
@@ -129,12 +134,12 @@ function RosterImportPage() {
     event.target.value = "";
     if (!file) return;
     setBusy(true);
-    setResult(null);
+    setLastResults(null);
     try {
       const XLSX = await import("xlsx");
       const isCsv = /\.csv$/i.test(file.name) || file.type === "text/csv";
-      // CSV cells must stay verbatim: SheetJS otherwise guesses dates and
-      // rewrites "2026-09-01" as "9/1/26" before validation ever sees it.
+      // CSV cells must stay verbatim string: SheetJS otherwise guesses dates and
+      // rewrites "2001-05-14" as "5/14/01" before validation sees it.
       const workbook = isCsv
         ? XLSX.read(await file.text(), { type: "string", raw: true })
         : XLSX.read(await file.arrayBuffer(), { cellDates: true });
@@ -149,7 +154,7 @@ function RosterImportPage() {
       ).map((row) =>
         row.map((cell) => {
           if (!(cell instanceof Date)) return cell;
-          // Preserve calendar date in IST/local time rather than shifting -1 day via UTC toISOString()
+          // Preserve calendar date in IST/local format rather than shifting -1 day via UTC
           return new Intl.DateTimeFormat("en-CA", {
             timeZone: "Asia/Kolkata",
             year: "numeric",
@@ -158,41 +163,82 @@ function RosterImportPage() {
           }).format(cell);
         }),
       );
-      const parsed = gridToRosterRaw(grid);
 
-      if (parsed.length === 0) throw new Error("No data rows were found in that file.");
+      const parsed = gridToOnboardingRows(grid);
+      if (parsed.rows.length === 0) {
+        throw new Error(
+          parsed.fileErrors.join(" ") || "No employee data rows were found in that file. Please check column headers.",
+        );
+      }
+
       setFileName(file.name);
-      setRaw(parsed);
-      const validated = await validateRosterUpload({
-        data: { fileName: file.name, rows: parsed },
+      setRawRows(parsed.rows);
+
+      const validation = await validateOnboardingBatch({
+        data: { rows: parsed.rows },
       });
-      setRows(validated.rows as RosterRow[]);
-      setSummary(validated.summary);
+
+      setRows(validation.rows);
+      setSummary(validation.summary);
       setFilter("all");
+      toast.success(
+        `Validated ${validation.summary.total} rows: ${validation.summary.creatable} ready to provision.`,
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not read that file.");
+      setRows(null);
+      setSummary(null);
     } finally {
       setBusy(false);
     }
   }
 
-  async function runImport() {
+  async function runProvisioning() {
     if (!rows) return;
+    const creatableRowNumbers = new Set(
+      rows.filter((r) => isCreatableRow(r)).map((r) => r.rowNumber),
+    );
+    const rowsToCreate = rawRows.filter((r) => creatableRowNumbers.has(r.rowNumber));
+
+    if (rowsToCreate.length === 0) {
+      toast.error("No valid rows available to provision.");
+      return;
+    }
+
     setBusy(true);
     setConfirmCommitOpen(false);
-    setProgress(`Queuing ${summary?.importable ?? 0} invitations…`);
+    setProgress(`Provisioning ${rowsToCreate.length} employee accounts in bounded batches…`);
+
     try {
-      const outcome = await commitRosterImport({ data: { fileName, rows: raw } });
-      setResult(outcome);
-      setProgress(`Dispatching invitations…`);
-      const dispatch = await runInvitationDispatch();
-      toast.success(
-        `${outcome.created} invited · ${outcome.skipped} skipped · ${outcome.failed} failed (${dispatch.sent} emails sent this pass).`,
-      );
+      const outcome = await createOnboardedEmployees({
+        data: {
+          batchKey: crypto.randomUUID(),
+          source: "bulk",
+          rows: rowsToCreate,
+        },
+      });
+      setLastResults(outcome.results);
+
+      const created = outcome.results.filter((r) => r.outcome === "created");
+      const failed = outcome.results.filter((r) => r.outcome !== "created");
+
+      if (created.length > 0) {
+        toast.success(
+          `Successfully provisioned ${created.length} employee accounts! (Sequential TAS IDs assigned).`,
+        );
+      }
+      if (failed.length > 0) {
+        toast.error(`${failed.length} account(s) could not be provisioned.`);
+      }
+
+      // Clear the staged import state
       setRows(null);
       setSummary(null);
+      setRawRows([]);
+      // Refresh the onboarded employees panel below
+      setPanelRefreshSignal((s) => s + 1);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "The import could not be completed.");
+      toast.error(error instanceof Error ? error.message : "Failed to provision accounts.");
     } finally {
       setBusy(false);
       setProgress(null);
@@ -201,8 +247,8 @@ function RosterImportPage() {
 
   return (
     <AppShell
-      title="Bulk roster import"
-      description="Upload a roster, review every row, then queue invitations through the throttled invite queue."
+      title="Bulk Employee Onboarding"
+      description="Upload a CSV or Excel roster with the 8 standard columns to validate and provision employee accounts in bulk. Setup emails can be sent afterwards."
       actions={
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" variant="outline" onClick={() => downloadTemplate("csv")}>
@@ -215,17 +261,23 @@ function RosterImportPage() {
       }
     >
       <HubSubNav tabs={ONBOARDING_HUB_TABS} />
+
       <div className="space-y-6">
+        {/* Step 1: Upload Card */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">1 · Upload the roster</CardTitle>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileSpreadsheet className="size-4 text-primary" />
+              1 · Upload Employee Roster
+            </CardTitle>
             <CardDescription>
-              CSV or Excel with the template columns. Employee IDs (TAS-001, ...) are automatically
-              assigned sequentially on account provisioning.
+              CSV or Excel spreadsheet matching the 8 standard fields: First Name, Last Name, Work Email,
+              Date of Birth (YYYY-MM-DD), Work Type, Role, Employment Category, Designation.
+              Employee IDs (e.g. TAS-022) are atomically claimed from the server sequence on provisioning.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Label htmlFor="roster">Roster file (.csv, .xlsx, .xls)</Label>
+            <Label htmlFor="roster">Roster spreadsheet (.csv, .xlsx, .xls)</Label>
             <Input
               id="roster"
               type="file"
@@ -234,26 +286,46 @@ function RosterImportPage() {
               disabled={busy}
             />
             {fileName ? (
-              <p className="break-words text-xs text-muted-foreground">Selected: {fileName}</p>
+              <p className="break-words text-xs text-muted-foreground">Selected file: {fileName}</p>
             ) : null}
           </CardContent>
         </Card>
 
+        {/* Step 2: Review Grid & Validation */}
         {rows && summary ? (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">2 · Review {summary.total} rows</CardTitle>
-              <CardDescription>
-                {summary.valid} valid · {summary.warning} with warnings · {summary.error} with
-                errors. Rows with errors are skipped automatically.
-              </CardDescription>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">2 · Review & Validate ({summary.total} rows)</CardTitle>
+                  <CardDescription>
+                    {summary.creatable} ready to provision · {summary.warning} with warnings · {errorCount} with errors.
+                    Rows with blocking errors are skipped automatically.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 bg-emerald-500/5">
+                    {summary.valid} Valid
+                  </Badge>
+                  {summary.warning > 0 && (
+                    <Badge variant="outline" className="border-amber-500/30 text-amber-600 bg-amber-500/5">
+                      {summary.warning} Warning
+                    </Badge>
+                  )}
+                  {errorCount > 0 && (
+                    <Badge variant="outline" className="border-destructive/30 text-destructive bg-destructive/5">
+                      {errorCount} Error
+                    </Badge>
+                  )}
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 {(
                   [
                     ["all", `All rows (${summary.total})`],
-                    ["error", `Errors only (${summary.error})`],
+                    ["error", `Errors only (${errorCount})`],
                     ["warning", `Warnings only (${summary.warning})`],
                   ] as [Filter, string][]
                 ).map(([value, label]) => (
@@ -268,67 +340,50 @@ function RosterImportPage() {
                     {label}
                   </Button>
                 ))}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={summary.error === 0}
-                  onClick={() =>
-                    downloadCsv(
-                      `roster_errors_${fileName.replace(/\.[^.]+$/, "")}.csv`,
-                      toCsv(
-                        rows.filter((r) => r.severity === "error"),
-                        [
-                          { key: "row", header: "Row", value: (r) => r.rowNumber },
-                          ...ROSTER_COLUMNS.map((c) => ({
-                            key: c,
-                            header: c,
-                            value: (r: RosterRow) => r.raw[c] ?? "",
-                          })),
-                          { key: "reason", header: "Reason", value: (r) => r.errors.join(" ") },
-                        ],
-                      ),
-                    )
-                  }
-                >
-                  <Download className="mr-1.5 size-4" aria-hidden="true" /> Export errors CSV
-                </Button>
+                {errorCount > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      downloadCsv(
+                        `onboarding_errors_${fileName.replace(/\.[^.]+$/, "")}.csv`,
+                        toCsv(
+                          rows.filter((r) => !isCreatableRow(r)),
+                          [
+                            { key: "row", header: "Row", value: (r) => r.rowNumber },
+                            { key: "first_name", header: "First Name", value: (r) => r.firstName },
+                            { key: "last_name", header: "Last Name", value: (r) => r.lastName },
+                            { key: "work_email", header: "Work Email", value: (r) => r.workEmail },
+                            { key: "work_type", header: "Work Type", value: (r) => r.workType ?? "" },
+                            { key: "role", header: "Role", value: (r) => r.role ?? "" },
+                            { key: "employment_category", header: "Employment Category", value: (r) => r.category ?? "" },
+                            { key: "designation", header: "Designation", value: (r) => r.designation },
+                            { key: "errors", header: "Errors", value: (r) => r.errors.join("; ") },
+                          ],
+                        ),
+                      )
+                    }
+                  >
+                    <Download className="mr-1.5 size-4" aria-hidden="true" /> Export errors CSV
+                  </Button>
+                )}
               </div>
 
               <div className="max-h-[28rem] overflow-auto rounded-md border border-border">
-                <table className="w-full min-w-[780px] text-sm">
+                <table className="w-full min-w-[840px] text-sm">
                   <thead className="sticky top-0 z-10 border-b border-border bg-muted text-left text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
-                      <th scope="col" className="px-2.5 py-2">
-                        #
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        State
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Name
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Email
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Type
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Designation
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Department
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Joining
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Lead
-                      </th>
-                      <th scope="col" className="px-2.5 py-2">
-                        Validation Notes
-                      </th>
+                      <th scope="col" className="px-2.5 py-2">#</th>
+                      <th scope="col" className="px-2.5 py-2">Status</th>
+                      <th scope="col" className="px-2.5 py-2">Full Name</th>
+                      <th scope="col" className="px-2.5 py-2">Work Email</th>
+                      <th scope="col" className="px-2.5 py-2">DOB Status</th>
+                      <th scope="col" className="px-2.5 py-2">Work Type</th>
+                      <th scope="col" className="px-2.5 py-2">Role</th>
+                      <th scope="col" className="px-2.5 py-2">Category</th>
+                      <th scope="col" className="px-2.5 py-2">Designation</th>
+                      <th scope="col" className="px-2.5 py-2">Validation Notes</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/70">
@@ -336,9 +391,9 @@ function RosterImportPage() {
                       <tr
                         key={row.rowNumber}
                         className={
-                          row.severity === "error"
+                          !isCreatableRow(row)
                             ? "bg-destructive/8"
-                            : row.severity === "warning"
+                            : row.status === "warning"
                               ? "bg-amber-500/8"
                               : "bg-emerald-500/5"
                         }
@@ -347,33 +402,43 @@ function RosterImportPage() {
                         <td className="px-2.5 py-2">
                           <Badge
                             variant={
-                              row.severity === "error"
+                              !isCreatableRow(row)
                                 ? "destructive"
-                                : row.severity === "warning"
+                                : row.status === "warning"
                                   ? "warning"
                                   : "success"
                             }
                           >
-                            {row.severity === "error"
+                            {!isCreatableRow(row)
                               ? "Error"
-                              : row.severity === "warning"
+                              : row.status === "warning"
                                 ? "Warning"
                                 : "Ready"}
                           </Badge>
                         </td>
-                        <td className="px-2.5 py-2 font-medium">{row.fullName || "—"}</td>
-                        <td className="px-2.5 py-2 text-xs">{row.raw["Work Email"] || "—"}</td>
+                        <td className="px-2.5 py-2 font-medium">
+                          {row.fullName || "—"}
+                        </td>
+                        <td className="px-2.5 py-2 text-xs font-mono">{row.workEmail || "—"}</td>
                         <td className="px-2.5 py-2 text-xs">
-                          {row.employmentType ?? row.raw["Employment Type"] ?? "—"}
+                          {row.dobStatus === "valid" ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-600 font-medium">
+                              <Lock className="size-3" /> Valid (Confidential)
+                            </span>
+                          ) : (
+                            <span className="text-destructive font-medium">
+                              {row.dobStatus === "missing" ? "Missing" : "Invalid date"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2.5 py-2 text-xs capitalize">{row.workType ?? "—"}</td>
+                        <td className="px-2.5 py-2 text-xs font-mono uppercase">{row.role ?? "—"}</td>
+                        <td className="px-2.5 py-2 text-xs capitalize">
+                          {row.category ? row.category.replace("_", " ") : "—"}
                         </td>
                         <td className="px-2.5 py-2 text-xs">{row.designation || "—"}</td>
-                        <td className="px-2.5 py-2 text-xs">{row.departmentName ?? "—"}</td>
-                        <td className="px-2.5 py-2 font-mono text-xs">
-                          {row.joiningDate ?? row.raw["Joining Date"] ?? "—"}
-                        </td>
-                        <td className="px-2.5 py-2 text-xs">{row.reportingLeadEmail ?? "—"}</td>
                         <td className="px-2.5 py-2 text-xs">
-                          {[...row.errors, ...row.warnings].join(" ") || "Valid for import"}
+                          {[...row.errors, ...row.warnings].join(" ") || "Valid for provisioning"}
                         </td>
                       </tr>
                     ))}
@@ -381,14 +446,14 @@ function RosterImportPage() {
                 </table>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 pt-2">
                 <Button
                   type="button"
                   onClick={() => setConfirmCommitOpen(true)}
-                  disabled={busy || summary.importable === 0}
+                  disabled={busy || summary.creatable === 0}
                 >
-                  <Upload className="mr-1.5 size-4" aria-hidden="true" /> Import{" "}
-                  {summary.importable} valid row{summary.importable === 1 ? "" : "s"}
+                  <UserPlus className="mr-1.5 size-4" aria-hidden="true" /> Provision{" "}
+                  {summary.creatable} Employee Account{summary.creatable === 1 ? "" : "s"}
                 </Button>
                 <Button
                   type="button"
@@ -397,13 +462,13 @@ function RosterImportPage() {
                   onClick={() => {
                     setRows(null);
                     setSummary(null);
-                    setRaw([]);
+                    setRawRows([]);
                   }}
                 >
                   Cancel
                 </Button>
                 {progress ? (
-                  <span role="status" aria-live="polite" className="text-sm text-muted-foreground">
+                  <span role="status" aria-live="polite" className="text-sm text-muted-foreground animate-pulse">
                     {progress}
                   </span>
                 ) : null}
@@ -412,56 +477,87 @@ function RosterImportPage() {
           </Card>
         ) : null}
 
-        {result ? (
-          <Card>
+        {/* Provisioning Outcome Banner if just executed */}
+        {lastResults ? (
+          <Card className="border-border">
             <CardHeader>
-              <CardTitle className="text-base">Import summary</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <CheckCircle2 className="size-4 text-emerald-600" />
+                Provisioning Batch Result
+              </CardTitle>
               <CardDescription>
-                Invited accounts land in Profile Pending once the person accepts their invite.
+                Accounts have been created in Supabase Auth with server-claimed sequential employee IDs.
+                Setup emails are NOT sent automatically — you can review and dispatch them below.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
-                <Badge variant="success">{result.created} created</Badge>
-                <Badge variant="secondary">{result.skipped} skipped</Badge>
-                <Badge variant="destructive">{result.failed} failed</Badge>
+                <Badge variant="success">
+                  {lastResults.filter((r) => r.outcome === "created").length} accounts provisioned
+                </Badge>
+                {lastResults.filter((r) => r.outcome !== "created").length > 0 && (
+                  <Badge variant="destructive">
+                    {lastResults.filter((r) => r.outcome !== "created").length} skipped / failed
+                  </Badge>
+                )}
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  downloadCsv(
-                    "roster_import_result.csv",
-                    toCsv(result.results, [
-                      { key: "row", header: "Row", value: (r) => r.rowNumber },
-                      { key: "name", header: "Full Name", value: (r) => r.fullName },
-                      { key: "email", header: "Work Email", value: (r) => r.email },
-                      { key: "outcome", header: "Outcome", value: (r) => r.outcome },
-                      { key: "reason", header: "Reason", value: (r) => r.reason },
-                    ]),
-                  )
-                }
-              >
-                <Download className="mr-1.5 size-4" aria-hidden="true" /> Download full result CSV
-              </Button>
+              <div className="max-h-48 overflow-auto rounded-md border border-border text-xs">
+                <table className="w-full text-left">
+                  <thead className="border-b bg-muted px-2 py-1 text-muted-foreground">
+                    <tr>
+                      <th className="px-2.5 py-1.5">Row</th>
+                      <th className="px-2.5 py-1.5">Employee ID</th>
+                      <th className="px-2.5 py-1.5">Name</th>
+                      <th className="px-2.5 py-1.5">Email</th>
+                      <th className="px-2.5 py-1.5">Outcome</th>
+                      <th className="px-2.5 py-1.5">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {lastResults.map((c) => (
+                      <tr key={c.rowNumber}>
+                        <td className="px-2.5 py-1 font-mono">{c.rowNumber}</td>
+                        <td className="px-2.5 py-1 font-mono font-medium">{c.employeeCode ?? "—"}</td>
+                        <td className="px-2.5 py-1">{c.fullName}</td>
+                        <td className="px-2.5 py-1 font-mono">{c.workEmail}</td>
+                        <td className="px-2.5 py-1">
+                          <Badge variant={c.outcome === "created" ? "success" : "secondary"}>
+                            {c.outcome}
+                          </Badge>
+                        </td>
+                        <td className="px-2.5 py-1 text-muted-foreground">{c.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </CardContent>
           </Card>
         ) : null}
+
+        {/* Live Onboarded Employees Panel: Review, Track Status & Send Setup Emails via Hostinger */}
+        <OnboardedEmployeesPanel key={panelRefreshSignal} />
       </div>
 
+      {/* Confirmation Dialog */}
       <AlertDialog open={confirmCommitOpen} onOpenChange={setConfirmCommitOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Queue and dispatch {summary?.importable ?? 0} employee invitations?
+              Provision {summary?.creatable ?? 0} employee account{(summary?.creatable ?? 0) === 1 ? "" : "s"}?
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              This creates invitation records for all {summary?.importable ?? 0} importable rows in{" "}
-              <strong>{fileName}</strong> and immediately runs the throttled invitation dispatcher.
-              {summary && summary.error > 0
-                ? ` (${summary.error} row(s) with errors will be skipped.)`
-                : ""}
+            <AlertDialogDescription className="space-y-2">
+              <p>
+                This will provision user accounts directly via Supabase Auth Admin API with sequential
+                employee IDs atomically claimed from the server sequence.
+              </p>
+              <p className="font-semibold text-foreground">
+                Account setup emails are NOT sent automatically during creation.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                You can review provisioned accounts and trigger time-limited, single-use account setup emails
+                individually or in bulk via Hostinger SMTP at any time from the management table.
+              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -470,10 +566,10 @@ function RosterImportPage() {
               disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
-                void runImport();
+                void runProvisioning();
               }}
             >
-              {busy ? "Importing…" : "Confirm & import"}
+              {busy ? "Provisioning…" : "Confirm & Provision"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
