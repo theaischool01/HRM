@@ -440,12 +440,15 @@ export const sendRecruitmentEmail = createServerFn({ method: "POST" })
       );
     }
 
-    // 2. Render & validate variables
+    // 2. Render & validate variables. `portal_url` is always the validated
+    //    canonical origin — a client-supplied value (or a browser's localhost
+    //    origin) can never reach a real recipient.
+    const { resolveEmailPortalUrl } = await import("./recruitment/email-transport.server");
     const rendered = renderEmailTemplate({
       subjectTemplate: data.subjectTemplate,
       bodyHtmlTemplate: data.bodyHtmlTemplate,
       bodyTextTemplate: data.bodyTextTemplate,
-      variables: data.variables,
+      variables: { ...data.variables, portal_url: resolveEmailPortalUrl() },
     });
 
     if (rendered.unknownVariables.length > 0) {
@@ -675,10 +678,9 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
     }
 
     const transport = createHostingerSmtpTransport();
-    const portalUrl =
-      process.env["SITE_URL"] ||
-      process.env["VITE_SITE_URL"] ||
-      "https://hrm.theaischool.co";
+    const { resolveEmailPortalUrl } = await import("./recruitment/email-transport.server");
+    // Throws before any send if the canonical portal URL is missing or local.
+    const portalUrl = resolveEmailPortalUrl();
     const defaultHrContact = `${actor.fullName} (${actor.workEmail})`;
     const hourlyBucket = new Date().toISOString().slice(0, 13);
 
@@ -725,8 +727,9 @@ export const sendBulkRecruitmentEmails = createServerFn({ method: "POST" })
           cand.available_joining_date ?? data.sharedVariables?.joining_date ?? "TBD",
         employee_id: data.sharedVariables?.employee_id ?? "Pending Allocation",
         interview_mode: iv?.mode ? iv.mode.toUpperCase() : "Online",
-        portal_url: portalUrl,
         ...data.sharedVariables,
+        // Trusted value always wins: HR-supplied variables cannot redirect portal links.
+        portal_url: portalUrl,
       };
 
       const rendered = renderEmailTemplate({
@@ -895,6 +898,18 @@ export const retryFailedEmail = createServerFn({ method: "POST" })
     if (!msg) throw new Error("Email message not found.");
     if (msg.status !== "failed" && msg.status !== "draft") {
       throw new Error(`Only failed or draft emails can be retried (current: ${msg.status}).`);
+    }
+    // Stored bodies of these messages are redacted / state-dependent; re-sending
+    // them verbatim would deliver a dead link or an outdated KYC result.
+    if (msg.template_slug === "account_setup") {
+      throw new Error(
+        "Account setup emails cannot be retried verbatim (the one-time link is redacted). Use Resend setup email in Onboarding to generate a fresh link.",
+      );
+    }
+    if (typeof msg.template_slug === "string" && msg.template_slug.startsWith("kyc_")) {
+      throw new Error(
+        "KYC emails are re-rendered from the current verification state. Use the KYC panel on the employee profile to resend.",
+      );
     }
 
     const recipientCheck = validateRecipientEmail(msg.recipient_email);

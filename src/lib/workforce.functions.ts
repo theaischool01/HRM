@@ -870,17 +870,15 @@ export const sendEmployeePasswordResetEmail = createServerFn({ method: "POST" })
       throw new Error("Could not find employee profile or email.");
     }
 
-    const baseSiteUrl = (
-      process.env["SITE_URL"] ||
-      process.env["VITE_SITE_URL"] ||
-      "https://hrm.theaischool.co"
-    ).replace(/\/+$/, "");
+    const { resolveSupabaseAuthRedirectUrl } = await import("./recruitment/email-transport.server");
+    // Validated canonical HTTPS origin; throws (no email) instead of using localhost.
+    const resetRedirect = resolveSupabaseAuthRedirectUrl("/auth/reset-password");
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { error: resetError } = await supabaseAdmin.auth.resetPasswordForEmail(
       profile.work_email,
       {
-        redirectTo: `${baseSiteUrl}/auth/reset-password`,
+        redirectTo: resetRedirect,
       },
     );
 

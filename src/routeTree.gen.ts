@@ -37,6 +37,7 @@ import { Route as AuthenticatedProjectsProjectIdRouteImport } from './routes/_au
 import { Route as AuthenticatedWorkforceIndexRouteImport } from './routes/_authenticated/workforce/index'
 import { Route as AuthenticatedWorkforcePersonIdRouteImport } from './routes/_authenticated/workforce/$personId'
 import { Route as ApiPublicHooksDispatchInvitationsRouteImport } from './routes/api/public/hooks/dispatch-invitations'
+import { Route as ApiPublicHooksDispatchKycNotificationsRouteImport } from './routes/api/public/hooks/dispatch-kyc-notifications'
 import { Route as ApiPublicHooksRunAutomationRouteImport } from './routes/api/public/hooks/run-automation'
 
 const IndexRoute = IndexRouteImport.update({
@@ -189,6 +190,12 @@ const ApiPublicHooksDispatchInvitationsRoute =
     path: '/api/public/hooks/dispatch-invitations',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicHooksDispatchKycNotificationsRoute =
+  ApiPublicHooksDispatchKycNotificationsRouteImport.update({
+    id: '/api/public/hooks/dispatch-kyc-notifications',
+    path: '/api/public/hooks/dispatch-kyc-notifications',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksRunAutomationRoute =
   ApiPublicHooksRunAutomationRouteImport.update({
     id: '/api/public/hooks/run-automation',
@@ -224,6 +231,7 @@ export interface FileRoutesByFullPath {
   '/projects/': typeof AuthenticatedProjectsIndexRoute
   '/workforce/': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
+  '/api/public/hooks/dispatch-kyc-notifications': typeof ApiPublicHooksDispatchKycNotificationsRoute
   '/api/public/hooks/run-automation': typeof ApiPublicHooksRunAutomationRoute
 }
 export interface FileRoutesByTo {
@@ -254,6 +262,7 @@ export interface FileRoutesByTo {
   '/projects': typeof AuthenticatedProjectsIndexRoute
   '/workforce': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
+  '/api/public/hooks/dispatch-kyc-notifications': typeof ApiPublicHooksDispatchKycNotificationsRoute
   '/api/public/hooks/run-automation': typeof ApiPublicHooksRunAutomationRoute
 }
 export interface FileRoutesById {
@@ -286,6 +295,7 @@ export interface FileRoutesById {
   '/_authenticated/projects/': typeof AuthenticatedProjectsIndexRoute
   '/_authenticated/workforce/': typeof AuthenticatedWorkforceIndexRoute
   '/api/public/hooks/dispatch-invitations': typeof ApiPublicHooksDispatchInvitationsRoute
+  '/api/public/hooks/dispatch-kyc-notifications': typeof ApiPublicHooksDispatchKycNotificationsRoute
   '/api/public/hooks/run-automation': typeof ApiPublicHooksRunAutomationRoute
 }
 export interface FileRouteTypes {
@@ -318,6 +328,7 @@ export interface FileRouteTypes {
     | '/projects/'
     | '/workforce/'
     | '/api/public/hooks/dispatch-invitations'
+    | '/api/public/hooks/dispatch-kyc-notifications'
     | '/api/public/hooks/run-automation'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -348,6 +359,7 @@ export interface FileRouteTypes {
     | '/projects'
     | '/workforce'
     | '/api/public/hooks/dispatch-invitations'
+    | '/api/public/hooks/dispatch-kyc-notifications'
     | '/api/public/hooks/run-automation'
   id:
     | '__root__'
@@ -379,6 +391,7 @@ export interface FileRouteTypes {
     | '/_authenticated/projects/'
     | '/_authenticated/workforce/'
     | '/api/public/hooks/dispatch-invitations'
+    | '/api/public/hooks/dispatch-kyc-notifications'
     | '/api/public/hooks/run-automation'
   fileRoutesById: FileRoutesById
 }
@@ -389,6 +402,7 @@ export interface RootRouteChildren {
   AuthCallbackRoute: typeof AuthCallbackRoute
   AuthResetPasswordRoute: typeof AuthResetPasswordRoute
   ApiPublicHooksDispatchInvitationsRoute: typeof ApiPublicHooksDispatchInvitationsRoute
+  ApiPublicHooksDispatchKycNotificationsRoute: typeof ApiPublicHooksDispatchKycNotificationsRoute
   ApiPublicHooksRunAutomationRoute: typeof ApiPublicHooksRunAutomationRoute
 }
 
@@ -590,6 +604,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksDispatchInvitationsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/dispatch-kyc-notifications': {
+      id: '/api/public/hooks/dispatch-kyc-notifications'
+      path: '/api/public/hooks/dispatch-kyc-notifications'
+      fullPath: '/api/public/hooks/dispatch-kyc-notifications'
+      preLoaderRoute: typeof ApiPublicHooksDispatchKycNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/run-automation': {
       id: '/api/public/hooks/run-automation'
       path: '/api/public/hooks/run-automation'
@@ -662,6 +683,8 @@ const rootRouteChildren: RootRouteChildren = {
   AuthResetPasswordRoute: AuthResetPasswordRoute,
   ApiPublicHooksDispatchInvitationsRoute:
     ApiPublicHooksDispatchInvitationsRoute,
+  ApiPublicHooksDispatchKycNotificationsRoute:
+    ApiPublicHooksDispatchKycNotificationsRoute,
   ApiPublicHooksRunAutomationRoute: ApiPublicHooksRunAutomationRoute,
 }
 export const routeTree = rootRouteImport

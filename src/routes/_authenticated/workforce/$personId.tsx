@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { getDocumentDownloadUrl, reviewDocument } from "@/lib/documents.functions";
+import { KycNotificationPanel } from "@/components/profile/kyc-notification-panel";
 import {
   assignableRolesFor,
   canModifyUserRoles,
@@ -426,6 +427,10 @@ function PersonProfileContent({
                 onVerificationNoteChange={setVerificationNote}
                 onDecideProfile={decideProfile}
               />
+
+              {canVerify && data.canSeeDocuments && actor.userId !== personId ? (
+                <KycNotificationPanel userId={personId} />
+              ) : null}
 
               <DirectorySecuritySection
                 workEmail={profile.work_email}

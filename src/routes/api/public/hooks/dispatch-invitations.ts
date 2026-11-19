@@ -34,9 +34,8 @@ export const Route = createFileRoute("/api/public/hooks/dispatch-invitations")({
 
         try {
           const { dispatchInvitationBatch } = await import("@/lib/invitations.server");
-          const result = await dispatchInvitationBatch({
-            redirectTo: `${new URL(request.url).origin}/auth/callback`,
-          });
+          // Redirect target comes from validated PUBLIC_APP_URL config, never request.url / Host.
+          const result = await dispatchInvitationBatch();
           return new Response(JSON.stringify(result), {
             headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
           });

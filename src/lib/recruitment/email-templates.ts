@@ -42,7 +42,7 @@ export const SAMPLE_EMAIL_VARIABLES: Record<EmailVariableKey, string> = {
   employee_id: "TAS-042",
   interview_mode: "Online",
   office_location: "The AI School HQ, Bengaluru",
-  portal_url: "https://hrm.theaischool.co",
+  portal_url: "https://hrm-theta-gilt.vercel.app",
 };
 
 export type EmailTemplateDefinition = {

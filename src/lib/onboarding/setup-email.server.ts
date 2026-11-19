@@ -14,11 +14,12 @@ import {
   redactSetupLink,
   renderAccountSetupEmail,
 } from "../emails/account-setup-email";
-import { canModifyUserRoles } from "../permissions";
+import { canModifyUserRoles, CATEGORY_LABELS, ROLE_LABELS, resolvePrimaryRole, type UserCategory } from "../permissions";
 import {
   createHostingerSmtpTransport,
   getRuntimeServerEnv,
   inspectEmailProviderConfig,
+  resolveEmailPortalUrl,
 } from "../recruitment/email-transport.server";
 import { ACCOUNT_SETUP_TEMPLATE_SLUG } from "./employee-onboarding";
 
@@ -33,14 +34,19 @@ export type SetupEmailResult = {
   messageId: string | null;
 };
 
+/** Canonical HTTPS portal origin (validated; throws instead of falling back to localhost). */
 export function resolvePortalUrl(): string {
-  const env = getRuntimeServerEnv();
-  return (env["SITE_URL"] || env["VITE_SITE_URL"] || "https://hrm.theaischool.co").trim().replace(/\/+$/, "");
+  return resolveEmailPortalUrl();
 }
 
 export function setupLinkExpiryLabel(): string {
   const env = getRuntimeServerEnv();
   return (env["AUTH_SETUP_LINK_EXPIRY_LABEL"] || "1 hour").trim().slice(0, 40);
+}
+
+function summariseRoleLabel(roles: readonly string[]): string | null {
+  if (roles.length === 0) return null;
+  return ROLE_LABELS[resolvePrimaryRole(roles)] ?? null;
 }
 
 export function assertSmtpReady(): void {
@@ -70,7 +76,7 @@ export async function sendAccountSetupEmail(params: {
   const [{ data: profile }, { data: roleRows }] = await Promise.all([
     supabaseAdmin
       .from("profiles")
-      .select("id, full_name, work_email, employee_code, designation, account_status, must_change_password")
+      .select("id, full_name, work_email, employee_code, designation, category, account_status, must_change_password")
       .eq("id", targetUserId)
       .maybeSingle(),
     supabaseAdmin.from("user_roles").select("role").eq("user_id", targetUserId),
@@ -109,7 +115,18 @@ export async function sendAccountSetupEmail(params: {
   }
 
   // One-time link (Supabase sends nothing itself with generateLink).
-  const portalUrl = resolvePortalUrl();
+  let portalUrl: string;
+  try {
+    portalUrl = resolvePortalUrl();
+  } catch (error) {
+    return {
+      userId: targetUserId,
+      email: profile.work_email,
+      outcome: "failed",
+      reason: error instanceof Error ? error.message : "Portal URL is not configured.",
+      messageId: null,
+    };
+  }
   const { data: link, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
     type: "recovery",
     email: profile.work_email,
@@ -142,6 +159,8 @@ export async function sendAccountSetupEmail(params: {
     setupUrl,
     portalUrl,
     linkExpiryLabel: setupLinkExpiryLabel(),
+    roleLabel: summariseRoleLabel(targetRoles),
+    categoryLabel: CATEGORY_LABELS[profile.category as UserCategory] ?? null,
   });
 
   const idempotencyKey = `${ACCOUNT_SETUP_TEMPLATE_SLUG}:${targetUserId}:${Date.now()}`;

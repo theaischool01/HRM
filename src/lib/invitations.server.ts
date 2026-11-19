@@ -168,15 +168,13 @@ export async function dispatchInvitationBatch(options?: {
     for (const row of rows) {
       const attempts = (row.attempts ?? 0) + 1;
       try {
-        const defaultRedirect = `${(
-          process.env["SITE_URL"] ||
-          process.env["VITE_SITE_URL"] ||
-          "https://hrm.theaischool.co"
-        ).replace(/\/+$/, "")}/auth/callback`;
+        const { resolveSupabaseAuthRedirectUrl } = await import("./recruitment/email-transport.server");
+        // Canonical, validated origin only — never the scheduler request's Host header.
+        const defaultRedirect = resolveSupabaseAuthRedirectUrl("/auth/callback");
 
         const { data: created, error: inviteError } =
           await supabaseAdmin.auth.admin.inviteUserByEmail(row.email, {
-            redirectTo: options?.redirectTo || defaultRedirect,
+            redirectTo: defaultRedirect,
             data: { full_name: row.full_name, invitation_id: row.id },
           });
 

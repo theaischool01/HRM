@@ -71,13 +71,9 @@ export const registerDocument = createServerFn({ method: "POST" })
       throw new Error("A verified document cannot be replaced unless returned by HR.");
     }
 
-    const oldPaths = (existingDocs ?? [])
-      .map((d) => d.file_path)
-      .filter((p) => p && p !== data.path);
-    if (oldPaths.length > 0) {
-      await context.supabase.storage.from("employee-documents").remove(oldPaths);
-    }
-
+    // Earlier versions (and their files) are preserved: the DB history trigger
+    // records the replaced row (status, HR note, file path) before it is removed
+    // from the "current documents" view, so past review decisions stay auditable.
     await context.supabase
       .from("documents")
       .delete()
@@ -101,6 +97,9 @@ export const registerDocument = createServerFn({ method: "POST" })
       entityId: data.path,
       detail: { docType: data.docType },
     });
+    // Resubmission after a correction request → "under review" in-app notice.
+    const { drainKycNotificationsSafely } = await import("./kyc/kyc-notifications.server");
+    await drainKycNotificationsSafely(context.userId);
     return { ok: true };
   });
 
@@ -144,10 +143,14 @@ export const reviewDocument = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((input: { documentId: string; approve: boolean; note?: string }) => {
     if (!input?.documentId) throw new Error("A document id is required.");
-    if (!input.approve && !input.note?.trim()) {
-      throw new Error("Add a reason when rejecting a document.");
+    const note = String(input.note ?? "")
+      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+      .trim()
+      .slice(0, 500);
+    if (!input.approve && !note) {
+      throw new Error("Add a correction reason when rejecting a document.");
     }
-    return input;
+    return { documentId: String(input.documentId), approve: input.approve === true, note };
   })
   .handler(async ({ data, context }) => {
     await requirePermission(context.supabase, context.userId, "documents:verify:all");
@@ -158,11 +161,29 @@ export const reviewDocument = createServerFn({ method: "POST" })
     if (isHr !== true && isSuper !== true) {
       throw new Error("Forbidden: only HR or Super Admin can verify employee KYC documents.");
     }
+
+    const { data: doc, error: loadError } = await context.supabase
+      .from("documents")
+      .select("id, user_id, doc_type, status")
+      .eq("id", data.documentId)
+      .maybeSingle();
+    if (loadError) throw loadError;
+    if (!doc) throw new Error("Document not found or not visible to you.");
+    if (doc.user_id === context.userId) {
+      throw new Error("You cannot review your own KYC documents.");
+    }
+
+    const nextStatus = data.approve ? "verified" : "rejected";
+    // Idempotent: repeated Verify clicks change nothing and emit no new events/emails.
+    if (doc.status === nextStatus && data.approve) {
+      return { ok: true, unchanged: true };
+    }
+
     const { error } = await context.supabase
       .from("documents")
       .update({
-        status: data.approve ? "verified" : "rejected",
-        review_note: data.note ?? null,
+        status: nextStatus,
+        review_note: data.approve ? null : data.note,
         reviewed_by: context.userId,
         reviewed_at: new Date().toISOString(),
       })
@@ -175,9 +196,14 @@ export const reviewDocument = createServerFn({ method: "POST" })
       action: data.approve ? "document.verified" : "document.rejected",
       entityType: "document",
       entityId: data.documentId,
-      detail: { note: data.note ?? null },
+      detail: { ownerId: doc.user_id, docType: doc.doc_type, previousStatus: doc.status, hasNote: Boolean(data.note) },
     });
-    return { ok: true };
+
+    // The decision is committed. Deliver any due KYC notification afterwards —
+    // an SMTP problem can never roll back or fail the review itself.
+    const { drainKycNotificationsSafely } = await import("./kyc/kyc-notifications.server");
+    await drainKycNotificationsSafely(doc.user_id);
+    return { ok: true, unchanged: false };
   });
 
 export const listMyDocuments = createServerFn({ method: "GET" })

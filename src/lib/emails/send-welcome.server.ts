@@ -4,6 +4,7 @@ import { CATEGORY_LABELS, ROLE_LABELS, type AppRole, type UserCategory } from "@
 import {
   createHostingerSmtpTransport,
   inspectEmailProviderConfig,
+  resolveEmailPortalUrl,
 } from "@/lib/recruitment/email-transport.server";
 
 export async function sendWelcomeEmailForProvisionedUser(params: {
@@ -13,7 +14,6 @@ export async function sendWelcomeEmailForProvisionedUser(params: {
   employeeCode: string;
   category: string;
   role: string;
-  portalUrl?: string;
 }): Promise<{ sent: boolean; reason?: string }> {
   try {
     // 1. Check idempotency: don't re-send if already sent
@@ -33,11 +33,13 @@ export async function sendWelcomeEmailForProvisionedUser(params: {
       return { sent: false, reason: "email-provider-not-configured" };
     }
 
-    const portalUrl =
-      params.portalUrl ||
-      process.env["SITE_URL"] ||
-      process.env["VITE_SITE_URL"] ||
-      "https://hrm.theaischool.co";
+    let portalUrl: string;
+    try {
+      portalUrl = resolveEmailPortalUrl();
+    } catch (error) {
+      console.error("[welcome-email] Portal URL misconfigured; welcome email not sent.");
+      return { sent: false, reason: error instanceof Error ? error.message : "portal-url-invalid" };
+    }
 
     const html = renderWelcomeEmailHtml({
       fullName: params.fullName,

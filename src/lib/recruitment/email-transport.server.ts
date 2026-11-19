@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
+import {
+  assertNoNonPublicLinks,
+  buildPortalLink,
+  resolveEmailPortalUrlFromEnv,
+} from "../app-url";
 
 const BRAND_LOGO_CID = "the-ai-school-logo@theaischool.co";
 const BRAND_LOGO_URL_RE = /(?:https?:\/\/[^"'\s)]+)?\/the-ai-school-logo\.png/gi;
@@ -181,26 +186,16 @@ export function resolveSupabaseAuthRedirectUrl(
   path: "/auth/reset-password" | "/auth/callback",
   env: Record<string, string | undefined> = getRuntimeServerEnv(),
 ): string {
-  const rawBase = (
-    env["SITE_URL"] ||
-    env["VITE_SITE_URL"] ||
-    "https://hrm.theaischool.co"
-  )
-    .trim()
-    .replace(/\/+$/, "");
+  // Every server-generated auth redirect ends up inside an email, so it uses the
+  // same strict canonical-URL rules (HTTPS, public host, no header derivation).
+  return buildPortalLink(resolveEmailPortalUrlFromEnv(env), path);
+}
 
-  let parsed: URL;
-  try {
-    parsed = new URL(rawBase);
-  } catch {
-    throw new Error("SITE_URL must be a valid http(s) URL for Supabase Auth redirects.");
-  }
-
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error("SITE_URL protocol must be https or http.");
-  }
-
-  return `${parsed.origin}${path}`;
+/** Canonical HTTPS portal origin for outbound email; throws if misconfigured. */
+export function resolveEmailPortalUrl(
+  env: Record<string, string | undefined> = getRuntimeServerEnv(),
+): string {
+  return resolveEmailPortalUrlFromEnv(env);
 }
 
 /**
@@ -653,6 +648,20 @@ export function createHostingerSmtpTransport(
           status: "failed",
           provider: "hostinger_smtp",
           errorMessage: "Email subject rejected: contains unsafe header characters.",
+          attemptsUsed: 0,
+        };
+      }
+
+      // Last line of defence for EVERY sender (setup, KYC, Email Center, custom
+      // templates): never deliver localhost / loopback / private-network links.
+      try {
+        assertNoNonPublicLinks(`${payload.html ?? ""}\n${payload.text ?? ""}`);
+      } catch (error) {
+        return {
+          ok: false,
+          status: "failed",
+          provider: "hostinger_smtp",
+          errorMessage: error instanceof Error ? error.message : "Email contains a non-public link.",
           attemptsUsed: 0,
         };
       }
