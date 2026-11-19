@@ -29,6 +29,8 @@ export const ONBOARDING_OPTIONAL_COLUMNS = [
   "reporting_lead_email",
   "internship_start",
   "internship_end",
+  "work_location",
+  "available_hours_per_day",
 ] as const;
 
 export type OnboardingRequiredColumn = (typeof ONBOARDING_REQUIRED_COLUMNS)[number];
@@ -45,10 +47,10 @@ export const FORBIDDEN_IMPORT_COLUMNS = [
   "temp_password",
 ] as const;
 
-export const ONBOARDING_MAX_ROWS = 200;
-export const ONBOARDING_MAX_FILE_BYTES = 2 * 1024 * 1024;
+export const ONBOARDING_MAX_ROWS = 500;
+export const ONBOARDING_MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** Rows provisioned per server call: keeps each request well inside serverless time limits. */
-export const ONBOARDING_CREATE_CHUNK = 10;
+export const ONBOARDING_CREATE_CHUNK = 25;
 /** Recipients handled per setup-email server call (paced inside the call). */
 export const ONBOARDING_EMAIL_CHUNK = 10;
 /** Pause between individual SMTP sends, respecting Hostinger mailbox throughput. */
@@ -74,20 +76,30 @@ export const ONBOARDING_CATEGORY_LABELS: Record<OnboardingCategory, string> = {
 
 export const ONBOARDING_WORK_TYPE_LABELS: Record<WorkType, string> = WORK_TYPE_LABELS;
 
-export type OnboardingRowStatus = "valid" | "warning" | "duplicate" | "invalid" | "unauthorized_role";
+export type OnboardingRowStatus =
+  | "valid"
+  | "warning"
+  | "needs_information"
+  | "duplicate"
+  | "invalid"
+  | "unauthorized_role"
+  | "excluded";
 
 export const ONBOARDING_STATUS_LABELS: Record<OnboardingRowStatus, string> = {
-  valid: "Valid",
+  valid: "Ready",
   warning: "Warning",
+  needs_information: "Needs Information",
   duplicate: "Duplicate",
-  invalid: "Invalid",
+  invalid: "Error",
   unauthorized_role: "Unauthorized Role",
+  excluded: "Excluded",
 };
 
 /** Raw row keyed by canonical column names (all values are strings). */
 export type OnboardingRawRow = Partial<Record<OnboardingColumn, string>> & {
   /** 1-based spreadsheet row number (header = row 1). */
   rowNumber: number;
+  exclude_from_import?: string;
 };
 
 export type DuplicateSource = "file" | "profile" | "auth" | "invitation";
@@ -111,6 +123,8 @@ export type ValidatedOnboardingRow = {
   reportingLeadId: string | null;
   internshipStart: string | null;
   internshipEnd: string | null;
+  workLocation: string | null;
+  availableHoursPerDay: number | null;
   status: OnboardingRowStatus;
   errors: string[];
   warnings: string[];
@@ -313,6 +327,12 @@ const HEADER_ALIASES: Record<string, OnboardingColumn> = {
   reporting_lead: "reporting_lead_email",
   internship_start: "internship_start",
   internship_end: "internship_end",
+  work_location: "work_location",
+  location: "work_location",
+  work_mode: "work_location",
+  available_hours_per_day: "available_hours_per_day",
+  available_hours: "available_hours_per_day",
+  hours_per_day: "available_hours_per_day",
 };
 
 export type ParsedOnboardingGrid = {
@@ -420,12 +440,14 @@ export function validateOnboardingRows(
 ): ValidatedOnboardingRow[] {
   const emailCounts = new Map<string, number>();
   for (const r of rawRows) {
+    if (r.exclude_from_import === "true") continue;
     const e = clean(r.work_email).toLowerCase();
     if (e) emailCounts.set(e, (emailCounts.get(e) ?? 0) + 1);
   }
   const seenInFile = new Set<string>();
 
   return rawRows.map((raw) => {
+    const isExcluded = raw.exclude_from_import === "true";
     const errors: string[] = [];
     const warnings: string[] = [];
     let duplicateSource: DuplicateSource | null = null;
@@ -519,8 +541,8 @@ export function validateOnboardingRows(
       warnings.push("No reporting lead set; leave/WFH requests stay blocked until HR assigns one.");
     }
 
-    // Duplicates (only meaningful for syntactically valid emails)
-    if (workEmail && EMAIL_RE.test(workEmail)) {
+    // Duplicates (only meaningful for syntactically valid emails on non-excluded rows)
+    if (!isExcluded && workEmail && EMAIL_RE.test(workEmail)) {
       const existing = lookups.existingEmails.get(workEmail);
       if (existing) {
         duplicateSource = existing;
@@ -536,15 +558,40 @@ export function validateOnboardingRows(
       seenInFile.add(workEmail);
     }
 
-    const status: OnboardingRowStatus = unauthorized
-      ? "unauthorized_role"
-      : duplicateSource && errors.every((e) => /already exists|Duplicate email|pending invitation/.test(e))
-        ? "duplicate"
-        : errors.length > 0
-          ? "invalid"
-          : warnings.length > 0
-            ? "warning"
-            : "valid";
+    const workLocation = clean(raw.work_location) || null;
+    const rawHours = clean(raw.available_hours_per_day);
+    const availableHoursPerDay = rawHours && !isNaN(Number(rawHours)) ? Number(rawHours) : null;
+
+    // Distinguish rows with missing required fields vs fatal formatting errors
+    const hasMissingFields =
+      !firstName ||
+      !lastName ||
+      !workEmail ||
+      !clean(raw.date_of_birth) ||
+      !workType ||
+      !role ||
+      !category ||
+      !designation;
+
+    const onlyMissingErrors =
+      hasMissingFields &&
+      !unauthorized &&
+      !duplicateSource &&
+      errors.every((e) => e.includes("is required") || e.includes("Missing") || e.includes("Unknown"));
+
+    const status: OnboardingRowStatus = isExcluded
+      ? "excluded"
+      : unauthorized
+        ? "unauthorized_role"
+        : duplicateSource && errors.every((e) => /already exists|Duplicate email|pending invitation/.test(e))
+          ? "duplicate"
+          : onlyMissingErrors
+            ? "needs_information"
+            : errors.length > 0
+              ? "invalid"
+              : warnings.length > 0
+                ? "warning"
+                : "valid";
 
     return {
       rowNumber: raw.rowNumber,
@@ -564,6 +611,8 @@ export function validateOnboardingRows(
       reportingLeadId,
       internshipStart,
       internshipEnd,
+      workLocation,
+      availableHoursPerDay,
       status,
       errors,
       warnings,
@@ -592,12 +641,14 @@ export function summariseOnboardingRows(rows: readonly ValidatedOnboardingRow[])
     creatable: 0,
     valid: 0,
     warning: 0,
+    needs_information: 0,
     duplicate: 0,
     invalid: 0,
     unauthorized_role: 0,
+    excluded: 0,
   };
   for (const r of rows) {
-    s[r.status] += 1;
+    if (s[r.status] !== undefined) s[r.status] += 1;
     if (isCreatableRow(r)) s.creatable += 1;
   }
   return s;
@@ -627,6 +678,8 @@ export const ONBOARDING_TEMPLATE_SAMPLE_ROWS: readonly Record<OnboardingColumn, 
     reporting_lead_email: "",
     internship_start: "",
     internship_end: "",
+    work_location: "",
+    available_hours_per_day: "",
   },
   {
     first_name: "Ravi",
@@ -642,6 +695,8 @@ export const ONBOARDING_TEMPLATE_SAMPLE_ROWS: readonly Record<OnboardingColumn, 
     reporting_lead_email: "",
     internship_start: "",
     internship_end: "",
+    work_location: "",
+    available_hours_per_day: "",
   },
 ];
 

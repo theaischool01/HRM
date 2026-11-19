@@ -211,7 +211,7 @@ describe("Part A — Employee Onboarding: Spreadsheet Grid Parser & Security", (
       ]),
     ];
     const parsed = gridToOnboardingRows(bigGrid);
-    expect(parsed.fileErrors.some((e) => e.includes("limited to 200 employees"))).toBe(true);
+    expect(parsed.fileErrors.some((e) => e.includes("limited to 500 employees"))).toBe(true);
   });
 });
 
@@ -563,5 +563,211 @@ describe("Part B — 10 AM to 6 PM Annotation Hourly Logging", () => {
       expect(mgmt.eligible).toBe(false);
       expect(mgmt.code).toBe("management_role");
     }
+  });
+});
+
+describe("Part F — Bulk Onboarding 500 Employees, Inline Editing & Staging Validation", () => {
+  const lookups: OnboardingLookups = {
+    existingEmails: new Map([["db.existing@theaischool.co", "profile"]]),
+    departments: new Map([
+      ["annotation", { id: "dept-1", name: "Annotation", code: "ANN" }],
+      ["engineering", { id: "dept-2", name: "Engineering", code: "ENG" }],
+    ]),
+    leadsByEmail: new Map([["lead@theaischool.co", "lead-uuid-1"]]),
+    assignableRoles: ["admin", "manager", "lead", "employee"],
+    todayIso: "2026-11-19",
+  };
+
+  it("successfully parses and validates up to 500 rows without dropping data", () => {
+    const raw500: OnboardingRawRow[] = Array.from({ length: 500 }, (_, i) => ({
+      rowNumber: i + 2,
+      first_name: "Employee",
+      last_name: "Member",
+      work_email: `user${i}@theaischool.co`,
+      date_of_birth: "2000-01-15",
+      work_type: "annotation",
+      role: "employee",
+      employment_category: "intern",
+      designation: "Annotation Associate",
+      department: "Annotation",
+      reporting_lead_email: "lead@theaischool.co",
+      work_location: "Bangalore Office",
+      available_hours_per_day: "8",
+    }));
+
+    const validated = validateOnboardingRows(raw500, lookups);
+    expect(validated).toHaveLength(500);
+    const summary = summariseOnboardingRows(validated);
+    expect(summary.total).toBe(500);
+    expect(summary.creatable).toBe(500);
+    expect(summary.valid).toBe(500);
+    expect(summary.invalid).toBe(0);
+    expect(summary.needs_information).toBe(0);
+  });
+
+  it("handles various dataset sizes: 1, 10, 50, 100, 250 rows correctly", () => {
+    for (const count of [1, 10, 50, 100, 250]) {
+      const rows: OnboardingRawRow[] = Array.from({ length: count }, (_, i) => ({
+        rowNumber: i + 2,
+        first_name: "Cohort",
+        last_name: "Member",
+        work_email: `batch${count}_${i}@theaischool.co`,
+        date_of_birth: "1998-05-10",
+        work_type: "engineering",
+        role: "employee",
+        employment_category: "full_time",
+        designation: "Software Engineer",
+        reporting_lead_email: "lead@theaischool.co",
+      }));
+      const validated = validateOnboardingRows(rows, lookups);
+      expect(validated).toHaveLength(count);
+      const summary = summariseOnboardingRows(validated);
+      expect(summary.total).toBe(count);
+      expect(summary.creatable).toBe(count);
+    }
+  });
+
+  it("classifies rows with missing fields as needs_information rather than fatal error", () => {
+    const rawWithMissing: OnboardingRawRow[] = [
+      {
+        rowNumber: 2,
+        first_name: "Rahul",
+        last_name: "Verma",
+        work_email: "rahul.verma@theaischool.co",
+        date_of_birth: "2001-08-20",
+        // work_type missing
+        role: "employee",
+        employment_category: "full_time",
+        designation: "Developer",
+      },
+      {
+        rowNumber: 3,
+        first_name: "Sneha",
+        last_name: "Sharma",
+        work_email: "sneha.sharma@theaischool.co",
+        date_of_birth: "2002-03-14",
+        work_type: "annotation",
+        // role and category missing
+        designation: "Analyst",
+      },
+    ];
+
+    const validated = validateOnboardingRows(rawWithMissing, lookups);
+    expect(validated[0]?.status).toBe("needs_information");
+    expect(isCreatableRow(validated[0]!)).toBe(false);
+    expect(validated[1]?.status).toBe("needs_information");
+    expect(isCreatableRow(validated[1]!)).toBe(false);
+
+    const summary = summariseOnboardingRows(validated);
+    expect(summary.needs_information).toBe(2);
+    expect(summary.creatable).toBe(0);
+  });
+
+  it("updates row from needs_information to valid upon inline editing", () => {
+    const rawRow: OnboardingRawRow = {
+      rowNumber: 2,
+      first_name: "Pooja",
+      last_name: "Reddy",
+      work_email: "pooja.reddy@theaischool.co",
+      date_of_birth: "1999-12-05",
+      work_type: "", // missing initially
+      role: "employee",
+      employment_category: "full_time",
+      designation: "Specialist",
+      reporting_lead_email: "lead@theaischool.co",
+    };
+
+    const initialValidation = validateOnboardingRows([rawRow], lookups);
+    expect(initialValidation[0]?.status).toBe("needs_information");
+    expect(isCreatableRow(initialValidation[0]!)).toBe(false);
+
+    // Simulate HR filling in work_type inline
+    const updatedRow: OnboardingRawRow = { ...rawRow, work_type: "annotation" };
+    const revalidated = validateOnboardingRows([updatedRow], lookups);
+    expect(revalidated[0]?.status).toBe("valid");
+    expect(isCreatableRow(revalidated[0]!)).toBe(true);
+  });
+
+  it("honors row exclusion flag exclude_from_import", () => {
+    const rawRows: OnboardingRawRow[] = [
+      {
+        rowNumber: 2,
+        first_name: "Arun",
+        last_name: "Kumar",
+        work_email: "arun.kumar@theaischool.co",
+        date_of_birth: "1997-07-07",
+        work_type: "annotation",
+        role: "employee",
+        employment_category: "full_time",
+        designation: "Annotator",
+        reporting_lead_email: "lead@theaischool.co",
+        exclude_from_import: "true",
+      },
+      {
+        rowNumber: 3,
+        first_name: "Meera",
+        last_name: "Nair",
+        work_email: "meera.nair@theaischool.co",
+        date_of_birth: "1998-08-08",
+        work_type: "operations",
+        role: "employee",
+        employment_category: "full_time",
+        designation: "Operations Executive",
+        reporting_lead_email: "lead@theaischool.co",
+      },
+    ];
+
+    const validated = validateOnboardingRows(rawRows, lookups);
+    expect(validated[0]?.status).toBe("excluded");
+    expect(isCreatableRow(validated[0]!)).toBe(false);
+    expect(validated[1]?.status).toBe("valid");
+    expect(isCreatableRow(validated[1]!)).toBe(true);
+
+    const summary = summariseOnboardingRows(validated);
+    expect(summary.total).toBe(2);
+    expect(summary.excluded).toBe(1);
+    expect(summary.creatable).toBe(1);
+  });
+
+  it("allows duplicate resolution by excluding one duplicate in file", () => {
+    const rawDuplicates: OnboardingRawRow[] = [
+      {
+        rowNumber: 2,
+        first_name: "Deepak",
+        last_name: "One",
+        work_email: "deepak.duplicate@theaischool.co",
+        date_of_birth: "1995-01-01",
+        work_type: "engineering",
+        role: "manager",
+        employment_category: "full_time",
+        designation: "Manager",
+      },
+      {
+        rowNumber: 3,
+        first_name: "Deepak",
+        last_name: "Two",
+        work_email: "deepak.duplicate@theaischool.co",
+        date_of_birth: "1995-01-01",
+        work_type: "engineering",
+        role: "manager",
+        employment_category: "full_time",
+        designation: "Manager",
+      },
+    ];
+
+    const initial = validateOnboardingRows(rawDuplicates, lookups);
+    expect(initial[0]?.status).toBe("duplicate");
+    expect(initial[1]?.status).toBe("duplicate");
+
+    // Exclude second duplicate
+    const resolved: OnboardingRawRow[] = [
+      rawDuplicates[0]!,
+      { ...rawDuplicates[1]!, exclude_from_import: "true" },
+    ];
+    const revalidated = validateOnboardingRows(resolved, lookups);
+    expect(revalidated[0]?.status).toBe("valid");
+    expect(isCreatableRow(revalidated[0]!)).toBe(true);
+    expect(revalidated[1]?.status).toBe("excluded");
+    expect(isCreatableRow(revalidated[1]!)).toBe(false);
   });
 });

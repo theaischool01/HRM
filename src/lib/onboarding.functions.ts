@@ -42,6 +42,8 @@ function sanitizeRawRows(rows: unknown, max: number): OnboardingRawRow[] {
       "reporting_lead_email",
       "internship_start",
       "internship_end",
+      "work_location",
+      "available_hours_per_day",
     ] as const) {
       const v = src[key];
       if (v !== undefined && v !== null) out[key] = String(v).slice(0, 300);
@@ -121,7 +123,7 @@ export const createOnboardedEmployees = createServerFn({ method: "POST" })
     return {
       batchKey: String(input.batchKey ?? ""),
       source: input.source,
-      rows: sanitizeRawRows(input?.rows, ONBOARDING_CREATE_CHUNK),
+      rows: sanitizeRawRows(input?.rows, Math.max(ONBOARDING_CREATE_CHUNK, 50)),
     };
   })
   .handler(async ({ data, context }) => {
