@@ -226,6 +226,7 @@ export type ScopedOrgGraph = {
       departmentId: string | null;
       projectManagerId: string | null;
       leadUserIds: ReadonlySet<string>;
+      createdBy?: string | null;
     }
   >;
   /** Non-ended allocations per user ID */
@@ -292,6 +293,7 @@ export function isManagerOfInGraph(
     const proj = graph.projects.get(alloc.projectId);
     if (!proj) continue;
     if (proj.projectManagerId === viewerId) return true;
+    if (proj.createdBy === viewerId) return true;
     if (isDepartmentManagerInGraph(graph, proj.departmentId, viewerId)) return true;
     if (proj.leadUserIds.has(viewerId)) return true;
   }
@@ -312,6 +314,7 @@ export function canManageProjectInGraph(
   if (!proj) return false;
   return (
     proj.projectManagerId === actorId ||
+    proj.createdBy === actorId ||
     isDepartmentManagerInGraph(graph, proj.departmentId, actorId)
   );
 }

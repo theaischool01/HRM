@@ -308,28 +308,30 @@ export const createProject = createServerFn({ method: "POST" })
 
     // 2. Permission and Manager scoping checks
     const canAll = actor.permissions.includes("projects:manage:all");
+    const canTeam = actor.permissions.includes("projects:manage:team");
+
+    if (!canAll && !canTeam) {
+      throw new Error("Forbidden: missing permission to manage projects.");
+    }
+
     let effectiveManagerId = data.projectManagerId || null;
 
-    if (!canAll) {
-      if (!actor.permissions.includes("projects:manage:team")) {
-        throw new Error("Forbidden: missing permission to manage projects.");
-      }
-
-      if (!data.departmentId) {
-        throw new Error("You must select a department you are assigned to manage.");
-      }
-
-      const deptMgrs = await selectDepartmentManagersSafe(context.supabase);
-      const isDeptMgr = deptMgrs.rows.some(
-        (r) => r.department_id === data.departmentId && r.manager_id === context.userId,
+    if (effectiveManagerId) {
+      // Validate that the assigned Project Manager has an authorized managerial/administrative role
+      const { data: mgrRoleRows } = await context.supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", effectiveManagerId);
+      const mgrRoles = (mgrRoleRows ?? []).map((r) => r.role);
+      const isEligibleMgr = mgrRoles.some(
+        (r) => r === "manager" || r === "admin" || r === "super_admin",
       );
-      if (!isDeptMgr) {
-        throw new Error("You are not assigned as a Manager for the selected department.");
+      if (!isEligibleMgr) {
+        throw new Error("The selected Project Manager is not eligible.");
       }
-
-      if (!effectiveManagerId) {
-        effectiveManagerId = context.userId;
-      }
+    } else if (!canAll) {
+      // For managers creating a project, default the responsible manager to themselves if not specified
+      effectiveManagerId = context.userId;
     }
 
     // 3. Project Lead eligibility validation

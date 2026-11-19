@@ -97,13 +97,16 @@ function ProjectsPage() {
       );
     });
   }, [projects, search, statusFilter]);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     code: "",
     name: "",
     clientName: "",
     description: "",
     departmentId: "",
-    projectManagerId: "",
+    projectManagerId:
+      actor.can("projects:manage:team") && !actor.can("projects:manage:all")
+        ? actor.userId
+        : "",
     startDate: "",
     endDate: "",
     projectLeadId: "",
@@ -117,7 +120,7 @@ function ProjectsPage() {
     requiredHeadcount: "1",
     status: "active",
     workType: "",
-  });
+  }));
 
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
 
@@ -190,7 +193,7 @@ function ProjectsPage() {
           <CardContent>
             {!actor.can("projects:manage:all") && (
               <div className="mb-4 rounded-md border border-dashed p-2.5 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Department Scoped Manager:</span> You can create and manage projects within your authorized departments.
+                <span className="font-medium text-foreground">Project Management:</span> Create a project for any organization department and assign its responsible Manager and Lead.
               </div>
             )}
             <form onSubmit={submit} className="grid gap-4 md:grid-cols-3">

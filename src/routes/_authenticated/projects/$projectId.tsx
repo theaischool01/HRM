@@ -106,6 +106,7 @@ function ProjectDetailPage() {
 
   const isScopedManager =
     data.project.project_manager_id === actor.userId ||
+    (data.project as { created_by?: string | null }).created_by === actor.userId ||
     Boolean(
       data.project.department_id &&
         reference.departmentManagers.some(

@@ -18,10 +18,10 @@ import {
 type Client = SupabaseClient<Database>;
 
 export const BASE_PROJECT_SELECT =
-  "id, code, client_name, name, description, start_date, end_date, project_lead_id, work_mode, shift, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, required_headcount, status, created_at";
+  "id, code, client_name, name, description, start_date, end_date, project_lead_id, work_mode, shift, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, required_headcount, status, created_by, created_at";
 
 export const FULL_PROJECT_SELECT =
-  "id, code, client_name, name, description, department_id, project_manager_id, start_date, end_date, project_lead_id, work_mode, shift, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, required_headcount, status, created_at";
+  "id, code, client_name, name, description, department_id, project_manager_id, start_date, end_date, project_lead_id, work_mode, shift, task_unit, hourly_task_target, daily_task_target, quality_target_pct, max_rejection_rate_pct, required_headcount, status, created_by, created_at";
 
 export type SafeProjectRow = {
   id: string;
@@ -43,6 +43,7 @@ export type SafeProjectRow = {
   max_rejection_rate_pct: number | null;
   required_headcount: number;
   status: string;
+  created_by: string | null;
   created_at: string;
 };
 
@@ -160,6 +161,7 @@ export async function buildScopedOrgGraph(supabase: Client): Promise<{
       departmentId: string | null;
       projectManagerId: string | null;
       leadUserIds: ReadonlySet<string>;
+      createdBy?: string | null;
     }
   >();
   for (const proj of projRes.rows) {
@@ -170,6 +172,7 @@ export async function buildScopedOrgGraph(supabase: Client): Promise<{
       departmentId: proj.department_id,
       projectManagerId: proj.project_manager_id,
       leadUserIds: leads,
+      createdBy: proj.created_by,
     });
   }
 
@@ -321,6 +324,7 @@ export async function resolveSupervisorScope(
       proj.leadUserIds.has(viewerId) ||
       (viewerRoles.includes("manager") &&
         (proj.projectManagerId === viewerId ||
+          proj.createdBy === viewerId ||
           (proj.departmentId != null && managedDepartmentIds.has(proj.departmentId))))
     ) {
       scopedProjectIds.add(projId);
