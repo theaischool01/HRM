@@ -280,6 +280,9 @@ describe("P0.5 — Hardened can_actor_assign_role privilege-escalation matrix", 
       expect(canActorAssignRole("u-2", ["hr"], "u-2", ["hr"], role)).toBe(false);
     }
 
+    // Super Admin cannot assign super_admin to anyone (singleton role for system owner only)
+    expect(canActorAssignRole("sa-1", ["super_admin"], "emp-1", ["employee"], "super_admin")).toBe(false);
+
     // HR can grant/revoke Admin, Manager, Lead, Employee on non-protected accounts
     expect(canActorAssignRole("hr-1", ["hr"], "emp-1", ["employee"], "admin")).toBe(true);
     expect(canActorAssignRole("hr-1", ["hr"], "adm-1", ["admin"], "admin")).toBe(true);

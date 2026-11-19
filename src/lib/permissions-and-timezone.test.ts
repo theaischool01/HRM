@@ -35,14 +35,17 @@ describe("7-role hierarchy & employment category separation", () => {
 });
 
 describe("RBAC role assignment authority (Super Admin, HR, Admin)", () => {
-  it("grants Super Admin complete role assignment authority", () => {
-    expect(assignableRolesFor(["super_admin"])).toEqual(APP_ROLES);
-    for (const role of APP_ROLES) {
+  it("grants Super Admin complete role assignment authority over all organizational roles (excluding singleton super_admin)", () => {
+    const expected = APP_ROLES.filter((r) => r !== "super_admin");
+    expect(assignableRolesFor(["super_admin"])).toEqual(expected);
+    for (const role of expected) {
       expect(canAssignRole(["super_admin"], role)).toBe(true);
     }
+    expect(canAssignRole(["super_admin"], "super_admin")).toBe(false);
     expect(canModifyUserRoles(["super_admin"], ["founder"])).toBe(true);
     expect(canModifyUserRoles(["super_admin"], ["hr"])).toBe(true);
     expect(canModifyUserRoles(["super_admin"], ["admin"])).toBe(true);
+    expect(canModifyUserRoles(["super_admin"], ["super_admin"])).toBe(false);
   });
 
   it("allows HR to assign and revoke Admin, Manager, Lead, and Employee, but not Super Admin, Founder, or HR", () => {

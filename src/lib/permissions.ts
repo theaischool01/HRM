@@ -103,13 +103,13 @@ export const ROLE_RANKS: Record<AppRole, number> = {
 
 /**
  * Returns the exact set of roles an actor is permitted to grant or revoke:
- * - Super Admin: all roles
+ * - Super Admin: all assignable organizational roles (super_admin is singleton for the system owner only)
  * - HR: Admin, Manager, Lead, Employee (can grant/revoke Admin, cannot touch Super Admin/Founder/HR)
  * - Admin: Manager, Lead, Employee (cannot grant/revoke Admin, HR, Founder, or Super Admin)
  */
 export function assignableRolesFor(actorRoles: readonly string[]): AppRole[] {
   if (actorRoles.includes("super_admin")) {
-    return ["super_admin", "founder", "hr", "admin", "manager", "lead", "employee"];
+    return ["founder", "hr", "admin", "manager", "lead", "employee"];
   }
   if (actorRoles.includes("hr")) {
     return ["admin", "manager", "lead", "employee"];
@@ -121,6 +121,7 @@ export function assignableRolesFor(actorRoles: readonly string[]): AppRole[] {
 }
 
 export function canAssignRole(actorRoles: readonly string[], targetRole: AppRole): boolean {
+  if (targetRole === "super_admin") return false;
   return assignableRolesFor(actorRoles).includes(targetRole);
 }
 
@@ -128,6 +129,7 @@ export function canModifyUserRoles(
   actorRoles: readonly string[],
   targetCurrentRoles: readonly string[],
 ): boolean {
+  if (targetCurrentRoles.includes("super_admin")) return false;
   if (actorRoles.includes("super_admin")) return true;
   if (actorRoles.includes("hr")) {
     return !targetCurrentRoles.some(

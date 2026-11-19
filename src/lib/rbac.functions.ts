@@ -127,6 +127,10 @@ export const setUserRoles = createServerFn({ method: "POST" })
     const actorRoles = (actorRoleRows ?? []).map((r) => r.role as AppRole);
     const currentRoles = (targetRoleRows ?? []).map((r) => r.role as AppRole);
 
+    if (data.roles.includes("super_admin") || currentRoles.includes("super_admin")) {
+      throw new Error("Forbidden: The Super Admin role is protected and cannot be assigned or modified.");
+    }
+
     if (!canModifyUserRoles(actorRoles, currentRoles)) {
       throw new Error(
         "Forbidden: You cannot modify roles for a user who holds higher or protected authority.",

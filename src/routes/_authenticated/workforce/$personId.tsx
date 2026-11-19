@@ -141,10 +141,10 @@ function PersonProfileContent({
   }));
 
   const [selectedRoles, setSelectedRoles] = useState<AppRole[]>(
-    () => (data.roles as AppRole[]) ?? ["employee"],
+    () => ((data.roles as AppRole[]) ?? ["employee"]).filter((r) => r !== "super_admin"),
   );
 
-  const allowedRolesToAssign = assignableRolesFor(actor.roles);
+  const allowedRolesToAssign = assignableRolesFor(actor.roles).filter((r) => r !== "super_admin");
   const canEditTargetRoles =
     canAssignRbac &&
     actor.userId !== personId &&
@@ -155,6 +155,7 @@ function PersonProfileContent({
   }
 
   function handleToggleRole(role: AppRole, checked: boolean) {
+    if (role === "super_admin") return;
     setSelectedRoles((prev) =>
       checked ? [...new Set([...prev, role])] : prev.filter((r) => r !== role),
     );
@@ -297,10 +298,15 @@ function PersonProfileContent({
     }
     setBusy(true);
     try {
+      const rolesToSave = selectedRoles.filter((r) => r !== "super_admin");
+      if (rolesToSave.length === 0) {
+        toast.error("At least one role is required.");
+        return;
+      }
       await setUserRoles({
         data: {
           userId: personId,
-          roles: selectedRoles,
+          roles: rolesToSave,
         },
       });
       toast.success("Authorization roles updated and recorded in audit trail.");

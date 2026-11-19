@@ -177,11 +177,13 @@ export function ProfileIdentityHeader({
               {departmentName ? ` · ${departmentName}` : ""} · {workEmail}
             </p>
             <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-              {roles.map((r) => (
-                <Badge key={r} variant="default" className="text-[11px]">
-                  {ROLE_LABELS[r as AppRole] ?? r}
-                </Badge>
-              ))}
+              {roles
+                .filter((r) => r !== "super_admin")
+                .map((r) => (
+                  <Badge key={r} variant="default" className="text-[11px]">
+                    {ROLE_LABELS[r as AppRole] ?? r}
+                  </Badge>
+                ))}
               {!isExecutiveGovernance && (
                 <Badge variant="secondary" className="text-[11px]">
                   {CATEGORY_LABELS[category as UserCategory] ?? category}
@@ -801,7 +803,12 @@ export function EmploymentDetailsSection({
             <DetailItem label="Department" value={departmentName} />
             <DetailItem
               label="Authorization roles"
-              value={roles.map((r) => ROLE_LABELS[r as AppRole] ?? r).join(", ")}
+              value={
+                roles
+                  .filter((r) => r !== "super_admin")
+                  .map((r) => ROLE_LABELS[r as AppRole] ?? r)
+                  .join(", ") || "Employee"
+              }
             />
             <DetailItem
               label="Employment status"
@@ -835,13 +842,12 @@ export function EmploymentDetailsSection({
                 Authorization Roles
               </p>
               <p className="text-xs text-muted-foreground">
-                Super Admin controls all roles; HR can grant/revoke Admin, Manager, Lead &amp;
-                Employee; Admin can grant/revoke Manager, Lead &amp; Employee. Every change is
-                written to the audit log.
+                HR can grant/revoke Admin, Manager, Lead &amp; Employee; Admin can grant/revoke
+                Manager, Lead &amp; Employee. Every change is written to the audit log.
               </p>
             </div>
             <div className="flex flex-wrap gap-2" role="group" aria-label="Authorization roles">
-              {APP_ROLES.map((role) => {
+              {APP_ROLES.filter((role) => role !== "super_admin").map((role) => {
                 const checked = selectedRoles.includes(role);
                 const canToggle = allowedRolesToAssign.includes(role);
                 return (
@@ -881,7 +887,10 @@ export function EmploymentDetailsSection({
                   <AlertDialogDescription>
                     Assigned roles will be updated to:{" "}
                     <strong>
-                      {selectedRoles.map((r) => ROLE_LABELS[r]).join(", ") || "None"}
+                      {selectedRoles
+                        .filter((r) => r !== "super_admin")
+                        .map((r) => ROLE_LABELS[r])
+                        .join(", ") || "None"}
                     </strong>
                     . This takes effect immediately on the server and is recorded in the audit log.
                   </AlertDialogDescription>
