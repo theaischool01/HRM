@@ -90,40 +90,9 @@ async function persistProjectWorkType(
   return { saved: true };
 }
 
-/** Blocks classifying a project as Annotation while non-annotation people are allocated. */
-async function assertAllocationsFitAnnotation(supabase: Client, projectId: string) {
-  const { data: allocs } = await supabase
-    .from("project_allocations")
-    .select("user_id")
-    .eq("project_id", projectId)
-    .neq("status", "ended");
-  const userIds = [...new Set((allocs ?? []).map((a) => a.user_id))];
-  if (userIds.length === 0) return;
-  const [{ data: profiles }, { data: roles }, types] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("id, full_name, account_status, employment_status, category")
-      .in("id", userIds),
-    supabase.from("user_roles").select("user_id, role").in("user_id", userIds),
-    loadProfileWorkTypes(supabase, userIds),
-  ]);
-  const blocked = (profiles ?? []).filter(
-    (p) =>
-      !evaluateAnnotationAssignable({
-        roles: (roles ?? []).filter((r) => r.user_id === p.id).map((r) => r.role),
-        workType: types.map.get(p.id) ?? null,
-        accountStatus: p.account_status,
-        employmentStatus: p.employment_status,
-        category: p.category,
-      }).eligible,
-  );
-  if (blocked.length > 0) {
-    throw new Error(
-      `This project has allocations for people who are not annotation employees (${blocked
-        .map((p) => p.full_name)
-        .join(", ")}). End or reassign them before classifying it as Annotation.`,
-    );
-  }
+/** Cross-department and cross-work-type allocations are permitted on all projects. */
+async function assertAllocationsFitAnnotation(_supabase: Client, _projectId: string) {
+  return;
 }
 
 function withoutProductionTargets<T extends Record<string, unknown>>(row: T, workType: WorkType): T {
@@ -195,21 +164,33 @@ export const getProject = createServerFn({ method: "GET" })
       }
     }
 
-    const [{ data: leads }, { data: allocations }, { data: peopleAll }, protectedIds, projectTypes] =
-      await Promise.all([
-        context.supabase.from("project_team_leads").select("id, lead_id").eq("project_id", data.id),
-        context.supabase
-          .from("project_allocations")
-          .select(
-            "id, user_id, reporting_lead_id, role_in_project, start_date, end_date, hours_per_day, allocation_pct, daily_task_target, quality_target_pct, max_rejection_rate_pct, status, acknowledged_at, acknowledgment_note, over_allocation_override, created_at",
-          )
-          .eq("project_id", data.id)
-          .order("created_at"),
-        context.supabase.from("profiles").select("id, full_name, work_email, designation"),
-        loadProtectedAccountIds(context.supabase),
-        loadProjectWorkTypes(context.supabase, [data.id]),
-      ]);
+    const [
+      { data: leads },
+      { data: allocations },
+      { data: peopleAll },
+      { data: departments },
+      protectedIds,
+      projectTypes,
+      workTypesRes,
+    ] = await Promise.all([
+      context.supabase.from("project_team_leads").select("id, lead_id").eq("project_id", data.id),
+      context.supabase
+        .from("project_allocations")
+        .select(
+          "id, user_id, reporting_lead_id, role_in_project, start_date, end_date, hours_per_day, allocation_pct, daily_task_target, quality_target_pct, max_rejection_rate_pct, status, acknowledged_at, acknowledgment_note, over_allocation_override, created_at",
+        )
+        .eq("project_id", data.id)
+        .order("created_at"),
+      context.supabase
+        .from("profiles")
+        .select("id, full_name, work_email, designation, employee_code, department_id, category"),
+      context.supabase.from("departments").select("id, name, code"),
+      loadProtectedAccountIds(context.supabase),
+      loadProjectWorkTypes(context.supabase, [data.id]),
+      loadProfileWorkTypes(context.supabase),
+    ]);
     const people = excludeProtectedAccounts(peopleAll ?? [], protectedIds);
+    const deptMap = new Map((departments ?? []).map((d) => [d.id, d.name]));
 
     // The profiles read above is RLS-scoped, so a viewer may be missing rows for
     // people on this project. profile_names() fills in name + designation so the
@@ -225,17 +206,39 @@ export const getProject = createServerFn({ method: "GET" })
     const personOf = (id: string | null | undefined) => {
       if (!id) return null;
       if (protectedIds.has(id)) {
-        return { id, full_name: "System Administrator", work_email: "", designation: null };
+        return {
+          id,
+          full_name: "System Administrator",
+          work_email: "",
+          designation: null,
+          employee_code: null,
+          department_name: "Administration",
+          work_type: null,
+          category: null,
+        };
       }
       const row = direct.get(id);
-      if (row?.full_name) return row;
+      const workType = workTypesRes.map.get(id) ?? null;
+      const deptName = row?.department_id ? deptMap.get(row.department_id) ?? "Unassigned" : "Unassigned";
+
+      if (row?.full_name) {
+        return {
+          ...row,
+          department_name: deptName,
+          work_type: workType,
+        };
+      }
       const named = fallback.get(id);
-      if (!named) return row ?? null;
+      if (!named) return row ? { ...row, department_name: deptName, work_type: workType } : null;
       return {
         id,
         full_name: named.fullName,
         work_email: row?.work_email ?? "",
         designation: named.designation,
+        employee_code: row?.employee_code ?? null,
+        department_name: deptName,
+        work_type: workType,
+        category: row?.category ?? null,
       };
     };
 

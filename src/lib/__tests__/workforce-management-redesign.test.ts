@@ -185,14 +185,14 @@ describe("Workforce Management Redesign — Domain & Hierarchy Rules", () => {
       if (actorRole === "super_admin") return true;
 
       if (actorRole === "admin") {
-        if (targetRole === "super_admin" || targetRole === "founder" || targetRole === "hr" || targetRole === "admin") {
+        if (targetRole === "hr" || targetRole === "admin") {
           return false;
         }
         return true;
       }
 
       if (actorRole === "hr") {
-        if (targetRole === "super_admin" || targetRole === "founder" || targetRole === "admin" || targetRole === "hr") {
+        if (targetRole === "admin" || targetRole === "hr") {
           return false;
         }
         return true;

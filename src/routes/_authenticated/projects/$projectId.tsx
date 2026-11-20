@@ -1,15 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowLeft, Pencil, UserPlus } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Pencil, UserPlus, Users } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { actorQueryOptions, useActor } from "@/hooks/use-actor";
 import { errorToAccessScreen } from "@/components/access-denied";
 import { PROJECT_SHIFT_LABELS, optionsOf } from "@/lib/enums";
 import { getProject, updateProject } from "@/lib/projects.functions";
-import { createAllocation, endAllocation, getAllocationLoad } from "@/lib/allocations.functions";
+import { getAllocatableEmployees } from "@/lib/allocations.functions";
 import { getOrgReference } from "@/lib/workforce.functions";
+import { ProjectAllocationTabs } from "@/components/projects/project-allocation-tabs";
+import { TeamAllocationsTable } from "@/components/projects/team-allocations-table";
 import {
   projectUsesProductionTargets,
   WORK_TYPE_LABELS,
@@ -121,12 +123,15 @@ function ProjectDetailPage() {
     actor.can("projects:manage:all") ||
     (actor.can("projects:manage:team") && isScopedManager);
 
+  const { data: allocatableData } = useQuery({
+    queryKey: ["allocatable-employees", projectId],
+    queryFn: () => getAllocatableEmployees({ data: { projectId } }),
+    enabled: Boolean(canManageAllocations),
+  });
+
   const [open, setOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [warning, setWarning] = useState<OverAllocation | null>(null);
-  const [load, setLoad] = useState<{ usedPct: number } | null>(null);
-  const [endTarget, setEndTarget] = useState<{ id: string; personName: string } | null>(null);
   const [editForm, setEditForm] = useState(() => ({
     name: data.project.name,
     clientName: data.project.client_name ?? "",
@@ -172,89 +177,9 @@ function ProjectDetailPage() {
       workType: (data.project.work_type as string | null) ?? "",
     });
   }, [data.project, data.teamLeads]);
-  const [form, setForm] = useState(() => ({
-    userId: "",
-    reportingLeadId: "",
-    roleInProject: "",
-    startDate: todayIso(),
-    endDate: "",
-    hoursPerDay: "8",
-    allocationPct: "100",
-    dailyTaskTarget: "",
-    qualityTargetPct: "",
-    maxRejectionRatePct: "",
-  }));
 
   const project = data.project;
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
-
-  async function pickPerson(userId: string) {
-    setForm((f) => ({ ...f, userId }));
-    setWarning(null);
-    try {
-      const result = await getAllocationLoad({ data: { userId } });
-      setLoad({ usedPct: result.usedPct });
-    } catch {
-      setLoad(null);
-    }
-  }
-
-  async function submit(override: boolean) {
-    setBusy(true);
-    try {
-      const result = await createAllocation({
-        data: {
-          projectId,
-          userId: form.userId,
-          reportingLeadId: form.reportingLeadId || null,
-          roleInProject: form.roleInProject || null,
-          startDate: form.startDate || null,
-          endDate: form.endDate || null,
-          hoursPerDay: Number(form.hoursPerDay || 8),
-          allocationPct: Number(form.allocationPct || 100),
-          dailyTaskTarget: num(form.dailyTaskTarget),
-          qualityTargetPct: num(form.qualityTargetPct),
-          maxRejectionRatePct: num(form.maxRejectionRatePct),
-          overAllocationOverride: override,
-        },
-      });
-      toast.success(
-        result.overAllocated
-          ? `Allocated at ${result.totalPct}% total — this person is over-allocated.`
-          : "Allocated. Waiting on their acknowledgment.",
-      );
-      setWarning(null);
-      setOpen(false);
-      setForm((f) => ({ ...f, userId: "", roleInProject: "" }));
-      setLoad(null);
-      await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      await queryClient.invalidateQueries({ queryKey: ["projects"] });
-    } catch (error) {
-      const over = parseOverAllocation(error);
-      if (over) {
-        setWarning(over);
-      } else {
-        toast.error(error instanceof Error ? error.message : "Could not allocate.");
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function end(id: string) {
-    setBusy(true);
-    try {
-      await endAllocation({ data: { id } });
-      toast.success("Allocation ended.");
-      setEndTarget(null);
-      await queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      await queryClient.invalidateQueries({ queryKey: ["projects"] });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not end the allocation.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function saveProjectEdits() {
     const editTargets = !editForm.workType || projectUsesProductionTargets(editForm.workType);
@@ -316,7 +241,7 @@ function ProjectDetailPage() {
           {canManageAllocations ? (
             <Button size="sm" onClick={() => setOpen((v) => !v)}>
               <UserPlus className="size-4" />
-              {open ? "Close" : "Allocate someone"}
+              {open ? "Close allocation" : "Allocate team members"}
             </Button>
           ) : null}
         </div>
@@ -626,214 +551,45 @@ function ProjectDetailPage() {
           ) : null}
 
           {canManageAllocations && open ? (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Allocate someone</CardTitle>
-                <CardDescription>
-                  They must acknowledge the assignment before they can log any work against it.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="alloc-person" className="text-xs text-muted-foreground">
-                      Person
-                    </Label>
-                    <Select value={form.userId} onValueChange={pickPerson}>
-                      <SelectTrigger id="alloc-person">
-                        <SelectValue placeholder="Select a person" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {reference.people
-                          .filter((p) => project.work_type !== "annotation" || p.work_type === "annotation")
-                          .map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.full_name}
-                            {p.designation ? ` — ${p.designation}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {project.work_type === "annotation" ? (
-                      <p className="text-xs text-muted-foreground">
-                        Annotation project — only employees with the Annotation work type are listed.
-                      </p>
-                    ) : null}
-                    {load ? (
-                      <p className="text-xs text-muted-foreground">
-                        Currently allocated {load.usedPct}% across live projects.
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="alloc-reporting-lead" className="text-xs text-muted-foreground">
-                      Reporting lead on this project
-                    </Label>
-                    <Select
-                      value={form.reportingLeadId}
-                      onValueChange={(v) => setForm({ ...form, reportingLeadId: v })}
-                    >
-                      <SelectTrigger id="alloc-reporting-lead">
-                        <SelectValue placeholder="Select a lead" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {reference.people.map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.full_name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <LabelledInput label="Role in project" value={form.roleInProject} onChange={(v) => setForm({ ...form, roleInProject: v })} />
-                  <LabelledInput label="Allocation %" type="number" value={form.allocationPct} onChange={(v) => setForm({ ...form, allocationPct: v })} />
-                  <LabelledInput label="Hours / day" type="number" value={form.hoursPerDay} onChange={(v) => setForm({ ...form, hoursPerDay: v })} />
-                  <LabelledInput label="Start date" type="date" value={form.startDate} onChange={(v) => setForm({ ...form, startDate: v })} />
-                  <LabelledInput label="End date" type="date" value={form.endDate} onChange={(v) => setForm({ ...form, endDate: v })} />
-                  <LabelledInput label="Daily task target" type="number" value={form.dailyTaskTarget} onChange={(v) => setForm({ ...form, dailyTaskTarget: v })} />
-                  <LabelledInput label="Quality target %" type="number" value={form.qualityTargetPct} onChange={(v) => setForm({ ...form, qualityTargetPct: v })} />
-                  <LabelledInput label="Max rejection %" type="number" value={form.maxRejectionRatePct} onChange={(v) => setForm({ ...form, maxRejectionRatePct: v })} />
-                </div>
-
-                {warning ? (
-                  <div
-                    role="alert"
-                    data-testid="over-allocation-warning"
-                    className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-200"
-                  >
-                    <p className="flex items-center gap-2 font-semibold">
-                      <AlertTriangle className="size-4 shrink-0" />
-                      Over-allocation: this would put them at {warning.total}%
-                    </p>
-                    <p className="mt-1">
-                      Already allocated {warning.usedPct}% ({warning.conflicts.join(", ")}); adding{" "}
-                      {warning.newPct}% exceeds 100% of their capacity.
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" onClick={() => setWarning(null)} disabled={busy}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" onClick={() => submit(true)} disabled={busy}>
-                        Allocate anyway
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <Button onClick={() => submit(false)} disabled={busy || !form.userId}>
-                    Allocate
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
+            <ProjectAllocationTabs
+              projectId={projectId}
+              projectName={project.name}
+              projectWorkType={project.work_type}
+              employees={allocatableData?.employees ?? []}
+              availableLeads={allocatableData?.availableLeads ?? []}
+              departments={allocatableData?.departments ?? []}
+              onClose={() => setOpen(false)}
+              onRefresh={async () => {
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+                  queryClient.invalidateQueries({ queryKey: ["allocatable-employees", projectId] }),
+                  queryClient.invalidateQueries({ queryKey: ["org-reference"] }),
+                ]);
+              }}
+            />
           ) : null}
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Team</CardTitle>
-              <CardDescription>Acknowledgment is recorded per person with an IST timestamp.</CardDescription>
-            </CardHeader>
-            <CardContent className="px-0">
-              {data.allocations.length === 0 ? (
-                <p className="px-6 py-8 text-center text-sm text-muted-foreground">
-                  Nobody is allocated to this project yet.
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Person</TableHead>
-                        <TableHead>Role</TableHead>
-                        <TableHead className="text-right">Alloc</TableHead>
-                        <TableHead>Acknowledged</TableHead>
-                        <TableHead>
-                          <span className="sr-only">Actions</span>
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.allocations.map((a) => (
-                        <TableRow key={a.id}>
-                          <TableCell>
-                            <div className="font-medium">{a.person?.full_name ?? "Unknown"}</div>
-                            <div className="text-xs text-muted-foreground">
-                              Lead: {a.reportingLead?.full_name ?? "—"}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-sm text-muted-foreground">
-                            {a.role_in_project ?? "—"}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">{a.allocation_pct}%</TableCell>
-                          <TableCell>
-                            {a.status === "ended" ? (
-                              <Badge variant="neutral">Ended</Badge>
-                            ) : a.acknowledged_at ? (
-                              <Badge variant="success">
-                                {new Date(a.acknowledged_at).toLocaleString("en-IN", {
-                                  timeZone: "Asia/Kolkata",
-                                  dateStyle: "medium",
-                                  timeStyle: "short",
-                                })}{" "}
-                                IST
-                              </Badge>
-                            ) : (
-                              <Badge variant="warning">Pending</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {canManageAllocations && a.status !== "ended" ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={busy}
-                                onClick={() =>
-                                  setEndTarget({
-                                    id: a.id,
-                                    personName: a.person?.full_name ?? "this team member",
-                                  })
-                                }
-                              >
-                                End
-                              </Button>
-                            ) : null}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <TeamAllocationsTable
+            projectId={projectId}
+            projectName={project.name}
+            projectDepartmentId={project.department_id}
+            projectDepartmentName={
+              reference.departments.find((d) => d.id === project.department_id)?.name ?? null
+            }
+            projectWorkType={project.work_type}
+            allocations={data.allocations as any}
+            availableLeads={allocatableData?.availableLeads ?? []}
+            canManage={canManageAllocations}
+            onRefresh={async () => {
+              await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["project", projectId] }),
+                queryClient.invalidateQueries({ queryKey: ["allocatable-employees", projectId] }),
+                queryClient.invalidateQueries({ queryKey: ["org-reference"] }),
+              ]);
+            }}
+          />
         </div>
       </div>
-
-      <AlertDialog open={Boolean(endTarget)} onOpenChange={(o) => !o && setEndTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>End project allocation?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will end{" "}
-              <span className="font-medium text-foreground">{endTarget?.personName}</span>&apos;s
-              active allocation on <span className="font-medium text-foreground">{project.name}</span>.
-              Historical task entries remain preserved, and they will no longer be able to log new
-              hours against this assignment.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={busy}
-              onClick={(e) => {
-                e.preventDefault();
-                if (endTarget) void end(endTarget.id);
-              }}
-            >
-              {busy ? "Ending…" : "End allocation"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </AppShell>
   );
 }
