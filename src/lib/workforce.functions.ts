@@ -31,7 +31,7 @@ import { todayIso } from "./timezone";
 
 
 const PROFILE_SELECT =
-  "id, full_name, work_email, personal_email, mobile, category, designation, department_id, reporting_lead_id, joining_date, work_location, account_status, employment_status, employee_code, photo_url, date_of_birth, current_address, permanent_address, emergency_contact_name, emergency_contact_phone, skills, experience_years, institution, internship_start, internship_end, available_hours_per_day, profile_submitted_at, profile_verified_at, needs_assignment, created_at";
+  "id, full_name, work_email, personal_email, mobile, category, designation, department_id, reporting_lead_id, joining_date, work_location, account_status, employment_status, employee_code, photo_url, date_of_birth, current_address, permanent_address, emergency_contact_name, emergency_contact_phone, skills, experience_years, institution, internship_start, internship_end, available_hours_per_day, profile_submitted_at, profile_verified_at, needs_assignment, welcome_email_sent_at, must_change_password, created_at";
 
 export type ProfileDraft = {
   fullName?: string;
@@ -171,17 +171,32 @@ export const listWorkforce = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const actor = await loadActor(context.supabase, context.userId);
-    const [{ data: rawProfiles, error }, { data: roles }, { data: departments }, scope, protectedIds, workTypes] =
-      await Promise.all([
-        context.supabase.from("profiles").select(PROFILE_SELECT).order("full_name"),
-        context.supabase.from("user_roles").select("user_id, role"),
-        context.supabase.from("departments").select("id, name, code"),
-        actor.permissions.includes("workforce:read:all")
-          ? Promise.resolve(null)
-          : resolveSupervisorScope(context.supabase, context.userId, actor.roles),
-        loadProtectedAccountIds(context.supabase),
-        loadProfileWorkTypes(context.supabase),
-      ]);
+    const [
+      { data: rawProfiles, error },
+      { data: roles },
+      { data: departments },
+      scope,
+      protectedIds,
+      workTypes,
+      { data: kycStates },
+      { data: pendingRequests },
+    ] = await Promise.all([
+      context.supabase.from("profiles").select(PROFILE_SELECT).order("full_name"),
+      context.supabase.from("user_roles").select("user_id, role"),
+      context.supabase.from("departments").select("id, name, code"),
+      actor.permissions.includes("workforce:read:all")
+        ? Promise.resolve(null)
+        : resolveSupervisorScope(context.supabase, context.userId, actor.roles),
+      loadProtectedAccountIds(context.supabase),
+      loadProfileWorkTypes(context.supabase),
+      (context.supabase as unknown as import("@supabase/supabase-js").SupabaseClient)
+        .from("employee_kyc_state")
+        .select("user_id, status, required_count, verified_count, pending_count, rejected_count, missing_count"),
+      context.supabase
+        .from("requests")
+        .select("user_id, request_type, status")
+        .eq("status", "pending"),
+    ]);
     if (error) throw error;
 
     // Protected system-owner accounts are never part of the Workforce Directory —
@@ -192,16 +207,128 @@ export const listWorkforce = createServerFn({ method: "GET" })
     const profiles = excludeProtectedAccounts(scopedProfiles, protectedIds);
 
     const deptMap = new Map((departments ?? []).map((d) => [d.id, d.name]));
+    const nameMap = new Map((rawProfiles ?? []).map((p) => [p.id, p.full_name]));
     const roleMap = new Map<string, string[]>();
     for (const row of roles ?? []) {
       roleMap.set(row.user_id, [...(roleMap.get(row.user_id) ?? []), row.role]);
     }
+
+    const kycStateMap = new Map<string, {
+      status: string;
+      required_count: number;
+      verified_count: number;
+      pending_count: number;
+      rejected_count: number;
+      missing_count: number;
+    }>();
+    for (const row of (kycStates ?? []) as {
+      user_id?: string;
+      status?: string;
+      required_count?: number;
+      verified_count?: number;
+      pending_count?: number;
+      rejected_count?: number;
+      missing_count?: number;
+    }[]) {
+      if (row?.user_id) {
+        kycStateMap.set(row.user_id, {
+          status: row.status ?? "not_started",
+          required_count: row.required_count ?? 5,
+          verified_count: row.verified_count ?? 0,
+          pending_count: row.pending_count ?? 0,
+          rejected_count: row.rejected_count ?? 0,
+          missing_count: row.missing_count ?? 5,
+        });
+      }
+    }
+
+    const requestSummaryMap = new Map<string, {
+      count: number;
+      hasLeave: boolean;
+      hasWfh: boolean;
+      hasAttendanceCorrection: boolean;
+    }>();
+    for (const req of pendingRequests ?? []) {
+      if (!req?.user_id) continue;
+      const curr = requestSummaryMap.get(req.user_id) ?? {
+        count: 0,
+        hasLeave: false,
+        hasWfh: false,
+        hasAttendanceCorrection: false,
+      };
+      curr.count += 1;
+      if (req.request_type === "leave") curr.hasLeave = true;
+      if (req.request_type === "wfh") curr.hasWfh = true;
+      if (req.request_type === "attendance_correction") curr.hasAttendanceCorrection = true;
+      requestSummaryMap.set(req.user_id, curr);
+    }
+
     const allowSensitivePii =
       actor.roles.includes("super_admin") || actor.roles.includes("hr");
 
     return profiles.map((profile) => {
       const personRoles = roleMap.get(profile.id) ?? [];
       const isSelf = profile.id === context.userId;
+      const missingLead = needsReportingLead({
+        roles: personRoles,
+        employmentStatus: profile.employment_status,
+        reportingLeadId: profile.reporting_lead_id,
+      });
+
+      const kyc = kycStateMap.get(profile.id) ?? {
+        status: "not_started",
+        required_count: 5,
+        verified_count: 0,
+        pending_count: 0,
+        rejected_count: 0,
+        missing_count: 5,
+      };
+
+      const reqSummary = requestSummaryMap.get(profile.id) ?? {
+        count: 0,
+        hasLeave: false,
+        hasWfh: false,
+        hasAttendanceCorrection: false,
+      };
+
+      let onboardingLifecycle = "Active · Verified";
+      if (profile.employment_status === "inactive" || profile.employment_status === "exited") {
+        onboardingLifecycle = "Deactivated";
+      } else if (profile.account_status === "invited") {
+        onboardingLifecycle = profile.welcome_email_sent_at ? "Setup Email Sent" : "Setup Email Not Sent";
+      } else if (profile.account_status === "activated") {
+        onboardingLifecycle = "Activated · Profile Pending";
+      } else if (profile.account_status === "profile_pending") {
+        onboardingLifecycle = "Profile Pending";
+      } else if (profile.account_status === "under_verification") {
+        onboardingLifecycle = "Under Verification";
+      } else if (profile.account_status === "active") {
+        onboardingLifecycle = "Active · Verified";
+      }
+
+      const pendingActionsList: string[] = [];
+      if (profile.account_status === "under_verification") {
+        pendingActionsList.push("Profile review pending");
+      }
+      if (kyc.pending_count > 0) {
+        pendingActionsList.push(`${kyc.pending_count} KYC doc${kyc.pending_count > 1 ? "s" : ""} awaiting review`);
+      }
+      if (kyc.rejected_count > 0) {
+        pendingActionsList.push(`${kyc.rejected_count} KYC correction${kyc.rejected_count > 1 ? "s" : ""} required`);
+      }
+      if (reqSummary.count > 0) {
+        pendingActionsList.push(`${reqSummary.count} open request${reqSummary.count > 1 ? "s" : ""}`);
+      }
+      if (missingLead) {
+        pendingActionsList.push("Reporting lead unassigned");
+      }
+
+      const needsHrAttention =
+        profile.account_status === "under_verification" ||
+        kyc.pending_count > 0 ||
+        kyc.rejected_count > 0 ||
+        reqSummary.count > 0;
+
       return {
         ...profile,
         personal_email: allowSensitivePii || isSelf ? profile.personal_email : null,
@@ -209,13 +336,24 @@ export const listWorkforce = createServerFn({ method: "GET" })
         current_address: allowSensitivePii || isSelf ? profile.current_address : null,
         permanent_address: allowSensitivePii || isSelf ? profile.permanent_address : null,
         department_name: profile.department_id ? (deptMap.get(profile.department_id) ?? null) : null,
+        reporting_lead_name: profile.reporting_lead_id ? (nameMap.get(profile.reporting_lead_id) ?? null) : null,
         work_type: workTypes.map.get(profile.id) ?? null,
         roles: personRoles,
-        missingReportingLead: needsReportingLead({
-          roles: personRoles,
-          employmentStatus: profile.employment_status,
-          reportingLeadId: profile.reporting_lead_id,
-        }),
+        missingReportingLead: missingLead,
+        kyc_status: kyc.status,
+        kyc_required_count: kyc.required_count,
+        kyc_verified_count: kyc.verified_count,
+        kyc_pending_count: kyc.pending_count,
+        kyc_rejected_count: kyc.rejected_count,
+        kyc_missing_count: kyc.missing_count,
+        pending_requests_count: reqSummary.count,
+        has_pending_leave: reqSummary.hasLeave,
+        has_pending_wfh: reqSummary.hasWfh,
+        has_pending_attendance_correction: reqSummary.hasAttendanceCorrection,
+        needs_hr_attention: needsHrAttention,
+        pending_actions_count: pendingActionsList.length,
+        pending_actions: pendingActionsList,
+        onboarding_lifecycle_status: onboardingLifecycle,
       };
     });
   });
@@ -316,13 +454,14 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
       status: string;
       review_note: string | null;
       reviewed_at: string | null;
+      revision?: number;
       created_at: string;
     }[] = [];
 
     if (canSeeDocuments) {
-      const { data: docRows } = await context.supabase
+      const { data: docRows } = await (context.supabase as unknown as import("@supabase/supabase-js").SupabaseClient)
         .from("documents")
-        .select("id, doc_type, file_name, file_path, status, review_note, reviewed_at, created_at")
+        .select("id, doc_type, file_name, file_path, status, review_note, reviewed_at, revision, created_at")
         .eq("user_id", data.id)
         .order("created_at", { ascending: false });
       documents = docRows ?? [];
@@ -350,9 +489,20 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
 
     const targetRoles = (roles ?? []).map((r) => r.role);
 
-    const [workTypeAssignment, annotation] = await Promise.all([
+    const [workTypeAssignment, annotation, { data: recentRequests }, { data: kycStateRow }] = await Promise.all([
       loadProfileWorkTypeAssignment(context.supabase, data.id),
       loadAnnotationContext(context.supabase, data.id, todayIso()),
+      context.supabase
+        .from("requests")
+        .select("id, request_type, start_date, end_date, reason, status, submitted_at, decided_at, created_at")
+        .eq("user_id", data.id)
+        .order("created_at", { ascending: false })
+        .limit(10),
+      (context.supabase as unknown as import("@supabase/supabase-js").SupabaseClient)
+        .from("employee_kyc_state")
+        .select("status, required_count, verified_count, pending_count, rejected_count, missing_count, completed_at, updated_at")
+        .eq("user_id", data.id)
+        .maybeSingle(),
     ]);
     let workTypeAssignedByName: string | null = null;
     if (workTypeAssignment.assignedBy) {
@@ -367,6 +517,8 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
       profile,
       roles: targetRoles,
       documents,
+      requests: recentRequests ?? [],
+      kycState: kycStateRow ?? null,
       canSeeSensitivePii,
       canSeeDocuments,
       department,
@@ -1036,5 +1188,430 @@ export const changeMyPassword = createServerFn({ method: "POST" })
     });
 
     return { ok: true };
+  });
+
+/**
+ * HR / Admin / Super Admin action: Deactivate an employee.
+ * Suspends active workforce privileges while preserving all attendance, tasks,
+ * KYC documents and audit history. Reversible via reactivateEmployee.
+ */
+export const deactivateEmployee = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { userId: string; reason?: string | null }) => {
+    if (!input?.userId) throw new Error("A person id is required.");
+    return { userId: input.userId, reason: input.reason?.trim() || null };
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "workforce:deactivate:all");
+
+    if (data.userId === userId) {
+      throw new Error("You cannot deactivate your own account.");
+    }
+
+    const [actor, targetRolesRes, isProtected] = await Promise.all([
+      loadActor(supabase, userId),
+      supabase.from("user_roles").select("role").eq("user_id", data.userId),
+      isProtectedAccountId(supabase, data.userId),
+    ]);
+
+    if (isProtected) {
+      throw new Error("Protected system-owner accounts cannot be deactivated through the workforce UI.");
+    }
+
+    const targetRoles = (targetRolesRes.data ?? []).map((r) => r.role);
+    if (targetRoles.includes("founder")) {
+      throw new Error("Founder accounts cannot be deactivated through the workforce UI.");
+    }
+
+    // Role hierarchy checks:
+    // HR cannot deactivate Admin, peer HR, Founder, or Super Admin
+    if (actor.roles.includes("hr") && !actor.roles.includes("super_admin") && !actor.roles.includes("admin")) {
+      if (
+        targetRoles.includes("admin") ||
+        targetRoles.includes("hr") ||
+        targetRoles.includes("founder") ||
+        targetRoles.includes("super_admin")
+      ) {
+        throw new Error("HR cannot deactivate Admin, peer HR, or leadership accounts.");
+      }
+    }
+
+    // Admin cannot deactivate Super Admin, Founder, HR, or peer Admin
+    if (actor.roles.includes("admin") && !actor.roles.includes("super_admin")) {
+      if (
+        targetRoles.includes("admin") ||
+        targetRoles.includes("hr") ||
+        targetRoles.includes("founder") ||
+        targetRoles.includes("super_admin")
+      ) {
+        throw new Error("Admin cannot deactivate Super Admin, Founder, HR, or peer Admin accounts.");
+      }
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        employment_status: "inactive",
+        last_working_day: todayIso(),
+      } as never)
+      .eq("id", data.userId);
+    if (error) throw error;
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "employee.deactivated",
+      entityType: "profile",
+      entityId: data.userId,
+      detail: { reason: data.reason },
+    });
+
+    return { ok: true };
+  });
+
+/** HR / Admin / Super Admin action: Reactivate a previously deactivated employee. */
+export const reactivateEmployee = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { userId: string }) => {
+    if (!input?.userId) throw new Error("A person id is required.");
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await requirePermission(supabase, userId, "workforce:deactivate:all");
+
+    const actor = await loadActor(supabase, userId);
+    if (
+      !actor.roles.includes("super_admin") &&
+      !actor.roles.includes("hr") &&
+      !actor.roles.includes("admin")
+    ) {
+      throw new Error("Only HR, Admin, or Super Admin can reactivate employees.");
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        employment_status: "active",
+        last_working_day: null,
+      } as never)
+      .eq("id", data.userId);
+    if (error) throw error;
+
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "employee.reactivated",
+      entityType: "profile",
+      entityId: data.userId,
+    });
+
+    return { ok: true };
+  });
+
+/**
+ * Pre-flight deletion assessment: checks dependencies before permanent deletion.
+ * If employee has genuine attendance records, task entries, direct reports, or managed projects,
+ * irreversible deletion is blocked with a clear reason.
+ */
+export const checkEmployeeDeletionEligibility = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { userId: string }) => {
+    if (!input?.userId) throw new Error("A person id is required.");
+    return input;
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const actor = await loadActor(supabase, userId);
+    const canManageWorkforce =
+      actor.roles.includes("super_admin") ||
+      actor.roles.includes("hr") ||
+      actor.roles.includes("admin");
+    if (!canManageWorkforce) {
+      throw new Error("You are not authorized to evaluate employee deletion.");
+    }
+
+    if (data.userId === userId) {
+      return {
+        canDelete: false,
+        blockReason: "You cannot delete your own active account.",
+        employeeCode: "",
+        workEmail: "",
+        fullName: "",
+        dependencies: {
+          attendanceDays: 0,
+          taskEntries: 0,
+          allocations: 0,
+          requests: 0,
+          documents: 0,
+          directReports: 0,
+          managedProjects: 0,
+        },
+      };
+    }
+
+    const isProtected = await isProtectedAccountId(supabase, data.userId);
+    if (isProtected) {
+      return {
+        canDelete: false,
+        blockReason: "Protected system-owner accounts can never be deleted from the workforce UI.",
+        employeeCode: "",
+        workEmail: "",
+        fullName: "",
+        dependencies: {
+          attendanceDays: 0,
+          taskEntries: 0,
+          allocations: 0,
+          requests: 0,
+          documents: 0,
+          directReports: 0,
+          managedProjects: 0,
+        },
+      };
+    }
+
+    const [
+      { data: targetProfile },
+      { data: targetRoles },
+      { count: attendanceCount },
+      { count: taskCount },
+      { count: allocCount },
+      { count: reqCount },
+      { count: docCount },
+      { count: directReportsCount },
+      { count: managedProjectsCount },
+    ] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("id, full_name, employee_code, work_email")
+        .eq("id", data.userId)
+        .maybeSingle(),
+      supabase.from("user_roles").select("role").eq("user_id", data.userId),
+      supabase
+        .from("attendance_days")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", data.userId),
+      supabase
+        .from("task_entries")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", data.userId),
+      supabase
+        .from("project_allocations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", data.userId),
+      supabase
+        .from("requests")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", data.userId),
+      supabase
+        .from("documents")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", data.userId),
+      supabase
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("reporting_lead_id", data.userId),
+      supabase
+        .from("projects")
+        .select("id", { count: "exact", head: true })
+        .or(`responsible_manager_id.eq.${data.userId},project_lead_id.eq.${data.userId}`),
+    ]);
+
+    if (!targetProfile) {
+      throw new Error("Employee profile could not be found.");
+    }
+
+    const roles = (targetRoles ?? []).map((r) => r.role);
+    if (roles.includes("founder")) {
+      return {
+        canDelete: false,
+        blockReason: "Founder accounts cannot be deleted.",
+        employeeCode: targetProfile.employee_code ?? "",
+        workEmail: targetProfile.work_email,
+        fullName: targetProfile.full_name,
+        dependencies: {
+          attendanceDays: 0,
+          taskEntries: 0,
+          allocations: 0,
+          requests: 0,
+          documents: 0,
+          directReports: 0,
+          managedProjects: 0,
+        },
+      };
+    }
+
+    // Role restrictions: HR cannot delete Admin or peer HR
+    if (
+      actor.roles.includes("hr") &&
+      !actor.roles.includes("super_admin") &&
+      !actor.roles.includes("admin")
+    ) {
+      if (roles.includes("admin") || roles.includes("hr")) {
+        return {
+          canDelete: false,
+          blockReason: "HR cannot delete Admin or peer HR accounts.",
+          employeeCode: targetProfile.employee_code ?? "",
+          workEmail: targetProfile.work_email,
+          fullName: targetProfile.full_name,
+          dependencies: {
+            attendanceDays: 0,
+            taskEntries: 0,
+            allocations: 0,
+            requests: 0,
+            documents: 0,
+            directReports: 0,
+            managedProjects: 0,
+          },
+        };
+      }
+    }
+
+    // Integrity checks: If employee has attendance days or task entries, deletion is strictly blocked
+    if ((attendanceCount ?? 0) > 0 || (taskCount ?? 0) > 0) {
+      return {
+        canDelete: false,
+        blockReason: `This employee has ${attendanceCount ?? 0} attendance record(s) and ${taskCount ?? 0} task entries. Deletion is blocked to preserve legal and operational compliance. Please deactivate the employee instead.`,
+        employeeCode: targetProfile.employee_code ?? "",
+        workEmail: targetProfile.work_email,
+        fullName: targetProfile.full_name,
+        dependencies: {
+          attendanceDays: attendanceCount ?? 0,
+          taskEntries: taskCount ?? 0,
+          allocations: allocCount ?? 0,
+          requests: reqCount ?? 0,
+          documents: docCount ?? 0,
+          directReports: directReportsCount ?? 0,
+          managedProjects: managedProjectsCount ?? 0,
+        },
+      };
+    }
+
+    // Leadership checks: If employee is manager of projects or has direct reports
+    if ((directReportsCount ?? 0) > 0 || (managedProjectsCount ?? 0) > 0) {
+      return {
+        canDelete: false,
+        blockReason: `This employee has ${directReportsCount ?? 0} direct report(s) and is assigned to lead/manage ${managedProjectsCount ?? 0} project(s). Reassign these dependencies before deletion.`,
+        employeeCode: targetProfile.employee_code ?? "",
+        workEmail: targetProfile.work_email,
+        fullName: targetProfile.full_name,
+        dependencies: {
+          attendanceDays: 0,
+          taskEntries: 0,
+          allocations: allocCount ?? 0,
+          requests: reqCount ?? 0,
+          documents: docCount ?? 0,
+          directReports: directReportsCount ?? 0,
+          managedProjects: managedProjectsCount ?? 0,
+        },
+      };
+    }
+
+    return {
+      canDelete: true,
+      blockReason: null,
+      employeeCode: targetProfile.employee_code ?? "",
+      workEmail: targetProfile.work_email,
+      fullName: targetProfile.full_name,
+      dependencies: {
+        attendanceDays: 0,
+        taskEntries: 0,
+        allocations: allocCount ?? 0,
+        requests: reqCount ?? 0,
+        documents: docCount ?? 0,
+        directReports: 0,
+        managedProjects: 0,
+      },
+    };
+  });
+
+/**
+ * Super Admin / Authorized HR action: Permanently delete an employee account.
+ * Strict prerequisite checks: verified dependencies, exact employee code / email confirmation.
+ */
+export const permanentlyDeleteEmployee = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: { userId: string; confirmation: string }) => {
+    if (!input?.userId) throw new Error("A person id is required.");
+    if (!input?.confirmation?.trim()) {
+      throw new Error("Type the employee ID or work email to confirm permanent deletion.");
+    }
+    return { userId: input.userId, confirmation: input.confirmation.trim() };
+  })
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    const actor = await loadActor(supabase, userId);
+    const canDeletePerm =
+      actor.roles.includes("super_admin") ||
+      actor.roles.includes("hr") ||
+      actor.roles.includes("admin");
+    if (!canDeletePerm) {
+      throw new Error("You are not authorized to permanently delete employees.");
+    }
+
+    // 1. Re-verify eligibility
+    const eligibility = await checkEmployeeDeletionEligibility({ data: { userId: data.userId } });
+    if (!eligibility.canDelete) {
+      throw new Error(`Deletion blocked: ${eligibility.blockReason}`);
+    }
+
+    // 2. Validate confirmation string
+    const match =
+      data.confirmation.toLowerCase() === eligibility.employeeCode.toLowerCase() ||
+      data.confirmation.toLowerCase() === eligibility.workEmail.toLowerCase();
+    if (!match) {
+      throw new Error(
+        `Confirmation text must match the employee ID (${eligibility.employeeCode}) or email (${eligibility.workEmail}).`,
+      );
+    }
+
+    // 3. Remove dependent records with service role
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    // Clean up dependent tables
+    await (supabaseAdmin as unknown as import("@supabase/supabase-js").SupabaseClient)
+      .from("employee_kyc_state")
+      .delete()
+      .eq("user_id", data.userId);
+    await supabaseAdmin.from("documents").delete().eq("user_id", data.userId);
+    await supabaseAdmin.from("project_allocations").delete().eq("user_id", data.userId);
+    await supabaseAdmin.from("requests").delete().eq("user_id", data.userId);
+    await supabaseAdmin.from("user_roles").delete().eq("user_id", data.userId);
+
+    // Remove profile
+    const { error: profileDeleteError } = await supabaseAdmin
+      .from("profiles")
+      .delete()
+      .eq("id", data.userId);
+    if (profileDeleteError) {
+      throw new Error(`Failed to delete profile: ${profileDeleteError.message}`);
+    }
+
+    // Remove Supabase Auth user
+    const { error: authDeleteError } = await supabaseAdmin.auth.admin.deleteUser(data.userId);
+    if (authDeleteError) {
+      console.error(
+        "[workforce] Auth user deletion failed after profile deletion",
+        authDeleteError.message,
+      );
+    }
+
+    // 4. Detailed audit trail
+    const { writeAudit } = await import("./audit.server");
+    await writeAudit(supabase, {
+      actorId: userId,
+      action: "employee.permanently_deleted",
+      entityType: "profile",
+      entityId: data.userId,
+      detail: {
+        employeeCode: eligibility.employeeCode,
+        workEmail: eligibility.workEmail,
+        fullName: eligibility.fullName,
+        dependenciesCleaned: eligibility.dependencies,
+      },
+    });
+
+    return { ok: true, employeeCode: eligibility.employeeCode, fullName: eligibility.fullName };
   });
 
