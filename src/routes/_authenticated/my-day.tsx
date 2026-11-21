@@ -310,37 +310,23 @@ function MyDayPage() {
           {ATTENDANCE_STATUS_LABELS[day.status] ?? day.status}
         </Badge>
       }
+      activeBreak={
+        openBreak
+          ? ({
+              id: openBreak.id,
+              category: openBreak.category,
+              started_at: openBreak.started_at,
+              expected_end_at: (openBreak as any).expected_end_at ?? null,
+              allowed_minutes: (openBreak as any).allowed_minutes ?? 15,
+              return_status: (openBreak as any).return_status ?? null,
+              overtime_seconds: (openBreak as any).overtime_seconds ?? 0,
+              break_request_id: (openBreak as any).break_request_id ?? null,
+              note: openBreak.note,
+              work_date: day.workDate,
+            } as any)
+          : null
+      }
     >
-      {/* Active Break Alert Banner */}
-      {openBreak && (
-        <div
-          role="status"
-          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm"
-        >
-          <div className="flex items-center gap-2.5">
-            <Coffee className="size-4 shrink-0 text-warning" />
-            <span>
-              <strong className="text-foreground">
-                Active {openBreak.category.replace("_", " ")} break
-              </strong>{" "}
-              <span className="text-muted-foreground">
-                (started at {timeOf(openBreak.started_at)} IST) — end break to resume active task
-                coverage.
-              </span>
-            </span>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy === "break"}
-            onClick={() =>
-              run("break", () => endBreak({ data: { id: openBreak.id } }), "Break ended.")
-            }
-          >
-            End break now
-          </Button>
-        </div>
-      )}
 
       {/* 4-Step Daily Workflow Progress Strip */}
       <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Daily workflow steps">

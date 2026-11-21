@@ -540,20 +540,20 @@ export const getWorkforceMember = createServerFn({ method: "GET" })
       annotation:
         workTypeAssignment.workType === "annotation"
           ? {
-              contributor: annotation.contributor,
-              logging: annotation.logging,
-              allocations: annotationAllocations.map((a) => ({
-                allocationId: a.allocationId,
-                projectId: a.projectId,
-                projectCode: a.projectCode,
-                projectName: a.projectName,
-                status: a.status,
-                acknowledgedAt: a.acknowledgedAt,
-                hourlyTarget: a.hourlyTarget,
-                dailyTarget: a.dailyTarget,
-                taskUnit: a.taskUnit,
-              })),
-            }
+            contributor: annotation.contributor,
+            logging: annotation.logging,
+            allocations: annotationAllocations.map((a) => ({
+              allocationId: a.allocationId,
+              projectId: a.projectId,
+              projectCode: a.projectCode,
+              projectName: a.projectName,
+              status: a.status,
+              acknowledgedAt: a.acknowledgedAt,
+              hourlyTarget: a.hourlyTarget,
+              dailyTarget: a.dailyTarget,
+              taskUnit: a.taskUnit,
+            })),
+          }
           : null,
       isExecutiveGovernance: isExecutiveGovernanceOnly(targetRoles),
       missingReportingLead: needsReportingLead({
@@ -691,12 +691,12 @@ export const reviewProfile = createServerFn({ method: "POST" })
       .update(
         data.approve
           ? {
-              account_status: "active",
-              employment_status: "active",
-              profile_verified_at: new Date().toISOString(),
-              profile_verified_by: userId,
-              needs_assignment: true,
-            }
+            account_status: "active",
+            employment_status: "active",
+            profile_verified_at: new Date().toISOString(),
+            profile_verified_by: userId,
+            needs_assignment: true,
+          }
           : { account_status: "profile_pending", profile_submitted_at: null },
       )
       .eq("id", data.userId);
@@ -885,11 +885,11 @@ export const upsertDepartment = createServerFn({ method: "POST" })
 
     const { data: row, error } = data.id
       ? await supabase
-          .from("departments")
-          .update(payload)
-          .eq("id", data.id)
-          .select("*")
-          .single()
+        .from("departments")
+        .update(payload)
+        .eq("id", data.id)
+        .select("*")
+        .single()
       : await supabase.from("departments").insert(payload).select("*").single();
     if (error) {
       if (error.code === "23505") throw new Error("Department name or code already exists.");

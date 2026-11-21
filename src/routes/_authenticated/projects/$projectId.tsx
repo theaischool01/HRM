@@ -247,49 +247,98 @@ function ProjectDetailPage() {
         </div>
       }
     >
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+      <div className="space-y-6">
+        <Card className="border-border/80 shadow-sm">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">Terms</CardTitle>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="text-base font-semibold">Project Terms &amp; Settings</CardTitle>
+                <CardDescription className="text-xs">
+                  Operational mode, staffing requirements, targets, and delivery leads.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                  Headcount: {data.allocations.filter((a) => a.status !== "ended").length}/{project.required_headcount}
+                </span>
+                <Badge variant="outline" className="capitalize text-xs">
+                  {project.status.replace("_", " ")}
+                </Badge>
+              </div>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-2 text-sm">
+          <CardContent>
             {project.description ? (
-              <p className="rounded-md bg-muted/40 p-2.5 text-xs text-muted-foreground">
+              <p className="mb-4 rounded-md bg-muted/40 p-2.5 text-xs text-muted-foreground">
                 {project.description}
               </p>
             ) : null}
-            <Row label="Status" value={project.status.replace("_", " ")} />
-            <Row label="Work mode" value={project.work_mode} />
-            <Row label="Shift" value={project.shift ?? "—"} />
-            <Row label="Work type" value={workTypeLabel(project.work_type as string | null)} />
-            <Row label="Task unit" value={project.task_unit} />
-            {!project.work_type || projectUsesProductionTargets(project.work_type as string) ? (
-              <>
-                <Row label="Hourly target" value={project.hourly_task_target ?? "—"} />
-                <Row label="Daily target" value={project.daily_task_target ?? "—"} />
-                <Row label="Quality target" value={project.quality_target_pct ? `${project.quality_target_pct}%` : "—"} />
-                <Row label="Max rejection" value={project.max_rejection_rate_pct ? `${project.max_rejection_rate_pct}%` : "—"} />
-              </>
-            ) : null}
-            <Row label="Headcount" value={`${data.allocations.filter((a) => a.status !== "ended").length}/${project.required_headcount}`} />
-            <Row label="Dates" value={`${project.start_date ?? "—"} → ${project.end_date ?? "open"}`} />
-            <Row
-              label="Department"
-              value={
-                reference.departments.find((d) => d.id === project.department_id)?.name ?? "—"
-              }
-            />
-            <Row label="Project manager" value={data.projectManager?.full_name ?? "—"} />
-            <Row label="Project lead" value={data.projectLead?.full_name ?? "—"} />
-            <Row
-              label="Team leads"
-              value={data.teamLeads.length ? data.teamLeads.map((l) => l.full_name).join(", ") : "—"}
-            />
+            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 text-xs">
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Work Mode</span>
+                <span className="font-semibold text-foreground capitalize">{project.work_mode}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Shift</span>
+                <span className="font-semibold text-foreground">{project.shift ?? "No fixed shift"}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Work Type</span>
+                <span className="font-semibold text-foreground">{workTypeLabel(project.work_type as string | null)}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Department</span>
+                <span className="font-semibold text-foreground">
+                  {reference.departments.find((d) => d.id === project.department_id)?.name ?? "—"}
+                </span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Project Manager</span>
+                <span className="font-semibold text-foreground">{data.projectManager?.full_name ?? "—"}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Project Lead</span>
+                <span className="font-semibold text-foreground">{data.projectLead?.full_name ?? "—"}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Team Leads</span>
+                <span className="font-semibold text-foreground">
+                  {data.teamLeads.length ? data.teamLeads.map((l) => l.full_name).join(", ") : "—"}
+                </span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Timeline</span>
+                <span className="font-semibold text-foreground font-mono">{project.start_date ?? "—"} → {project.end_date ?? "open"}</span>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                <span className="block text-muted-foreground">Task Unit</span>
+                <span className="font-semibold text-foreground">{project.task_unit}</span>
+              </div>
+              {!project.work_type || projectUsesProductionTargets(project.work_type as string) ? (
+                <>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                    <span className="block text-muted-foreground">Hourly Target</span>
+                    <span className="font-semibold text-foreground font-mono">{project.hourly_task_target ?? "—"}</span>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                    <span className="block text-muted-foreground">Daily Target</span>
+                    <span className="font-semibold text-foreground font-mono">{project.daily_task_target ?? "—"}</span>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                    <span className="block text-muted-foreground">Quality Target</span>
+                    <span className="font-semibold text-foreground font-mono">{project.quality_target_pct ? `${project.quality_target_pct}%` : "—"}</span>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-2.5">
+                    <span className="block text-muted-foreground">Max Rejection</span>
+                    <span className="font-semibold text-foreground font-mono">{project.max_rejection_rate_pct ? `${project.max_rejection_rate_pct}%` : "—"}</span>
+                  </div>
+                </>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
 
-        <div className="space-y-4 lg:col-span-2">
-          {canManageProject && editOpen ? (
+        {canManageProject && editOpen ? (
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Edit project &amp; leads</CardTitle>
@@ -588,7 +637,6 @@ function ProjectDetailPage() {
               ]);
             }}
           />
-        </div>
       </div>
     </AppShell>
   );

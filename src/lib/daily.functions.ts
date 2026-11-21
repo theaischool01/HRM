@@ -117,6 +117,16 @@ export const getMyDay = createServerFn({ method: "POST" })
       };
     }
 
+    // Auto-reconcile scheduled breaks for today's active check-in
+    if (day.check_in_at && !day.check_out_at && workDate === todayIso()) {
+      try {
+        const { reconcileScheduledBreaksInternal } = await import("./breaks.functions");
+        await reconcileScheduledBreaksInternal(userId);
+      } catch {
+        // Non-blocking fallback
+      }
+    }
+
     const [
       { data: entries },
       { data: breaks },

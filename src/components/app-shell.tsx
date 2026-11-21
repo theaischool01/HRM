@@ -1,4 +1,5 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlarmClock,
   BarChart3,
@@ -30,6 +31,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useActor } from "@/hooks/use-actor";
 import { supabase } from "@/integrations/supabase/client";
+import { getActiveBreak } from "@/lib/breaks.functions";
+import { GlobalBreakOverlay } from "@/components/breaks/global-break-overlay";
 import {
   buildRoleNavigation,
   isNavItemActive,
@@ -66,17 +69,31 @@ export function AppShell({
   description,
   actions,
   children,
+  activeBreak: propActiveBreak,
 }: {
   title: string;
   description?: string | undefined;
   actions?: ReactNode | undefined;
   children: ReactNode;
+  activeBreak?: import("@/lib/breaks.functions").ActiveBreakState | null | undefined;
 }) {
   const actor = useActor();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // Active break query with 5s polling and focus refetch
+  const { data: activeBreakData } = useQuery({
+    queryKey: ["current-active-break"],
+    queryFn: () => getActiveBreak(),
+    refetchInterval: 5_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const activeBreak =
+    propActiveBreak !== undefined ? propActiveBreak : (activeBreakData?.activeBreak ?? null);
 
   const navGroups = buildRoleNavigation(actor);
   const execOnly = isExecutiveGovernanceOnly(actor.roles);
@@ -185,6 +202,18 @@ export function AppShell({
 
   return (
     <div className="flex min-h-screen bg-background">
+      {activeBreak ? (
+        <GlobalBreakOverlay
+          activeBreak={activeBreak}
+          onBreakEnded={async () => {
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["current-active-break"] }),
+              queryClient.invalidateQueries({ queryKey: ["my-day"] }),
+            ]);
+          }}
+        />
+      ) : null}
+
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground focus:shadow-md focus:outline-none"

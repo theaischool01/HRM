@@ -37,6 +37,103 @@ export type WindowEvaluation =
   | { canStart: true; timeRemainingSeconds: number; expectedEndIso: string }
   | { canStart: false; reason: string; code: "before_window" | "after_window" };
 
+export type ScheduledBreakEligibility =
+  | {
+      eligible: true;
+      startedAtIso: string;
+      expectedEndIso: string;
+      allowedMinutes: number;
+    }
+  | {
+      eligible: false;
+      reason: string;
+      code: "not_yet_due" | "late_checkin" | "not_checked_in" | "already_checked_out";
+    };
+
+/**
+ * Evaluates whether a scheduled break (Lunch or Short Break) is eligible to be
+ * auto-started or reconciled for a checked-in employee.
+ */
+export function evaluateScheduledBreakEligibility(
+  category: "lunch" | "short_break",
+  params: {
+    checkInAt: string | Date | null | undefined;
+    checkOutAt: string | Date | null | undefined;
+    currentTime?: Date;
+    workDate?: string;
+  },
+): ScheduledBreakEligibility {
+  if (!params.checkInAt) {
+    return {
+      eligible: false,
+      code: "not_checked_in",
+      reason: "Employee is not checked in for today.",
+    };
+  }
+  if (params.checkOutAt) {
+    return {
+      eligible: false,
+      code: "already_checked_out",
+      reason: "Employee has already checked out for today.",
+    };
+  }
+
+  const currentIst = getIstWallClock(params.currentTime || new Date());
+  const workDate = params.workDate || currentIst.workDate;
+  const checkInIst = getIstWallClock(new Date(params.checkInAt));
+
+  if (category === "lunch") {
+    const windowStartSeconds = LUNCH_WINDOW.startHour * 3600 + LUNCH_WINDOW.startMinute * 60; // 13:30 = 48,600s
+    if (currentIst.totalSecondsFromMidnight < windowStartSeconds) {
+      return {
+        eligible: false,
+        code: "not_yet_due",
+        reason: "Lunch break automatically starts at 1:30 PM IST.",
+      };
+    }
+    // If employee checked in after 1:30 PM IST, do not backdate a break they didn't take
+    if (checkInIst.workDate === workDate && checkInIst.totalSecondsFromMidnight > windowStartSeconds) {
+      return {
+        eligible: false,
+        code: "late_checkin",
+        reason: "Employee checked in after scheduled lunch start time (1:30 PM IST).",
+      };
+    }
+
+    return {
+      eligible: true,
+      startedAtIso: new Date(`${workDate}T13:30:00+05:30`).toISOString(),
+      expectedEndIso: new Date(`${workDate}T14:30:00+05:30`).toISOString(),
+      allowedMinutes: 60,
+    };
+  }
+
+  // category === "short_break"
+  const windowStartSeconds = SHORT_BREAK_WINDOW.startHour * 3600 + SHORT_BREAK_WINDOW.startMinute * 60; // 16:45 = 60,300s
+  if (currentIst.totalSecondsFromMidnight < windowStartSeconds) {
+    return {
+      eligible: false,
+      code: "not_yet_due",
+      reason: "Short break automatically starts at 4:45 PM IST.",
+    };
+  }
+  // If employee checked in after 4:45 PM IST, do not backdate
+  if (checkInIst.workDate === workDate && checkInIst.totalSecondsFromMidnight > windowStartSeconds) {
+    return {
+      eligible: false,
+      code: "late_checkin",
+      reason: "Employee checked in after scheduled short break start time (4:45 PM IST).",
+    };
+  }
+
+  return {
+    eligible: true,
+    startedAtIso: new Date(`${workDate}T16:45:00+05:30`).toISOString(),
+    expectedEndIso: new Date(`${workDate}T17:00:00+05:30`).toISOString(),
+    allowedMinutes: 15,
+  };
+}
+
 /**
  * Extracts Asia/Kolkata (IST) wall-clock time from a Date or timestamp.
  * IST is fixed UTC + 5:30 (+19,800,000 ms) with no daylight savings.
@@ -180,6 +277,16 @@ export function formatDurationHms(totalSeconds: number): string {
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+/** Always formats seconds as HH:MM:SS (e.g. 01:00:00, 00:45:00) */
+export function formatFullHms(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 /** Formats overtime as +HH:MM:SS */

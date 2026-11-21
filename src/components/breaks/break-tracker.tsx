@@ -341,131 +341,7 @@ export function BreakTracker({
 
       <CardContent className="space-y-6">
         {/* ============================================================== */}
-        {/* 1. ACTIVE BREAK LIVE HERO PANEL (When ANY break is running)    */}
-        {/* ============================================================== */}
-        {openBreak && activeBreakStats ? (
-          <div
-            role="region"
-            aria-label="Active break timer"
-            className={`rounded-xl border p-5 sm:p-6 transition-all shadow-sm ${
-              activeBreakStats.isOvertime
-                ? "border-destructive/60 bg-destructive/10 text-foreground ring-1 ring-destructive/30"
-                : "border-primary/40 bg-primary/5 text-foreground"
-            }`}
-          >
-            {/* Header / Alarm Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <div className="flex items-center gap-2.5">
-                <span className="relative flex size-3">
-                  <span
-                    className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${
-                      activeBreakStats.isOvertime ? "bg-destructive" : "bg-primary"
-                    }`}
-                  />
-                  <span
-                    className={`relative inline-flex size-3 rounded-full ${
-                      activeBreakStats.isOvertime ? "bg-destructive" : "bg-primary"
-                    }`}
-                  />
-                </span>
-                <span className="font-semibold text-base sm:text-lg">
-                  Active {BREAK_CATEGORY_DISPLAY[openBreak.category as ValidBreakCategory] || "Break"}
-                </span>
-              </div>
-
-              {activeBreakStats.isOvertime ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="destructive" className="animate-pulse flex items-center gap-1.5 font-semibold px-2.5 py-1 text-xs">
-                    <AlertTriangle className="size-3.5" /> OVERTIME RETURN
-                  </Badge>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    className="h-8 px-2.5 text-xs border border-destructive/20 hover:bg-destructive/15"
-                    onClick={handleMuteToggle}
-                    aria-label={alarmMuted ? "Unmute overtime alert" : "Mute overtime alert"}
-                  >
-                    {alarmMuted ? (
-                      <span className="flex items-center gap-1.5 text-muted-foreground">
-                        <VolumeX className="size-4" /> Muted
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1.5 text-destructive font-medium">
-                        <Volume2 className="size-4 animate-bounce" /> Sound On
-                      </span>
-                    )}
-                  </Button>
-                </div>
-              ) : (
-                <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 px-2.5 py-1 text-xs font-medium">
-                  Timer Running
-                </Badge>
-              )}
-            </div>
-
-            {/* Timestamps Row */}
-            <div className="grid grid-cols-2 gap-3 text-xs sm:text-sm text-muted-foreground mb-5 bg-background/80 rounded-lg p-3 border border-border/60">
-              <div>
-                <span className="block font-medium text-foreground">Actual Start:</span>
-                <span className="font-mono text-foreground font-semibold">
-                  {formatTimeWithSecondsIst(openBreak.started_at)}
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="block font-medium text-foreground">Scheduled Return:</span>
-                <span className="font-mono text-foreground font-semibold">
-                  {formatTimeWithSecondsIst(activeBreakStats.expectedEndIso)}
-                </span>
-              </div>
-            </div>
-
-            {/* Countdown / Overtime Centerpiece */}
-            <div className="text-center py-2 sm:py-3">
-              <div className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-1.5">
-                {activeBreakStats.isOvertime ? "Overtime Elapsed Beyond Scheduled Return" : "Time Remaining Until Scheduled Return"}
-              </div>
-              <div
-                className={`font-mono text-5xl sm:text-6xl font-bold tracking-tight ${
-                  activeBreakStats.isOvertime ? "text-destructive" : "text-foreground"
-                }`}
-              >
-                {activeBreakStats.isOvertime
-                  ? formatOvertimeHms(activeBreakStats.overtimeSeconds)
-                  : formatDurationHms(activeBreakStats.remainingSeconds)}
-              </div>
-              {!activeBreakStats.isOvertime && (
-                <div className="mt-4 w-full max-w-lg mx-auto">
-                  <Progress value={activeBreakStats.progressPercent} className="h-2.5" />
-                </div>
-              )}
-              {activeBreakStats.isOvertime && (
-                <p className="mt-3 text-sm text-destructive font-medium max-w-md mx-auto">
-                  Your break deadline has passed. Please return to your workstation and complete your break below.
-                </p>
-              )}
-            </div>
-
-            {/* Mandatory Manual End Break Button */}
-            <div className="mt-6 pt-4 border-t border-border/50">
-              <Button
-                type="button"
-                className="w-full text-base font-semibold h-12 bg-primary text-primary-foreground hover:bg-primary/90 shadow-md"
-                disabled={busy === "end-break"}
-                onClick={handleEndBreak}
-              >
-                <CheckCircle2 className="mr-2 size-5" />
-                {busy === "end-break" ? "Recording Return…" : "End Break / Completed"}
-              </Button>
-              <p className="text-xs text-center text-muted-foreground mt-2">
-                Breaks never close automatically. Manual completion is mandatory to record your exact return time.
-              </p>
-            </div>
-          </div>
-        ) : null}
-
-        {/* ============================================================== */}
-        {/* 2. THREE BALANCED BREAK CARDS (Full-Width Responsive Grid)     */}
+        {/* DAILY BREAKS (Scheduled & Personalized)                        */}
         {/* ============================================================== */}
         <div>
           <div className="mb-3 flex items-center justify-between">
@@ -503,9 +379,21 @@ export function BreakTracker({
                       </p>
                     </div>
                   </div>
-                  {hasTakenLunchToday && (
+                  {hasTakenLunchToday ? (
                     <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 bg-emerald-500/5 text-xs font-medium">
                       Completed
+                    </Badge>
+                  ) : openBreak?.category === "lunch" ? (
+                    <Badge variant="warning" className="text-xs font-medium animate-pulse">
+                      Active
+                    </Badge>
+                  ) : !lunchWindow.canStart && lunchWindow.code === "after_window" ? (
+                    <Badge variant="outline" className="text-xs text-muted-foreground">
+                      Missed
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="border-primary/30 text-primary bg-primary/5 text-xs font-medium">
+                      Scheduled
                     </Badge>
                   )}
                 </div>
@@ -525,6 +413,10 @@ export function BreakTracker({
                 <div className="pt-2 border-t border-border/50 text-xs min-h-[38px] flex items-center">
                   {hasTakenLunchToday ? (
                     <span className="text-muted-foreground">Completed for today. Exactly 1 lunch allowed per day.</span>
+                  ) : openBreak?.category === "lunch" ? (
+                    <span className="text-primary font-medium flex items-center gap-1.5">
+                      <Hourglass className="size-3.5 shrink-0" /> Full-screen timer active · End break to return.
+                    </span>
                   ) : !lunchWindow.canStart ? (
                     <span className="text-muted-foreground flex items-center gap-1.5">
                       <Clock className="size-3.5 shrink-0" /> {lunchWindow.reason}
@@ -538,22 +430,21 @@ export function BreakTracker({
               </div>
 
               <div className="pt-4 mt-auto">
-                <Button
-                  type="button"
-                  size="default"
-                  disabled={
-                    !checkedIn ||
-                    checkedOut ||
-                    hasTakenLunchToday ||
-                    !lunchWindow.canStart ||
-                    Boolean(openBreak) ||
-                    busy === "start-lunch"
-                  }
-                  onClick={() => handleStartFixedBreak("lunch")}
-                  className="w-full font-semibold h-10"
-                >
-                  <Play className="mr-1.5 size-4" /> Start Lunch
-                </Button>
+                <div className="rounded-lg border border-border/80 bg-muted/40 p-2.5 text-center text-xs">
+                  {hasTakenLunchToday ? (
+                    <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                      ✓ Lunch completed for today
+                    </span>
+                  ) : openBreak?.category === "lunch" ? (
+                    <span className="font-semibold text-primary animate-pulse">
+                      ● Active (Click End Break in timer)
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      Automatically starts at <strong className="text-foreground">1:30 PM IST</strong>
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -576,9 +467,21 @@ export function BreakTracker({
                       </p>
                     </div>
                   </div>
-                  {hasTakenShortBreakToday && (
+                  {hasTakenShortBreakToday ? (
                     <Badge variant="outline" className="border-emerald-500/30 text-emerald-600 bg-emerald-500/5 text-xs font-medium">
                       Completed
+                    </Badge>
+                  ) : openBreak?.category === "short_break" ? (
+                    <Badge variant="warning" className="text-xs font-medium animate-pulse">
+                      Active
+                    </Badge>
+                  ) : !shortBreakWindow.canStart && shortBreakWindow.code === "after_window" ? (
+                    <Badge variant="outline" className="text-xs text-muted-foreground">
+                      Missed
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="border-primary/30 text-primary bg-primary/5 text-xs font-medium">
+                      Scheduled
                     </Badge>
                   )}
                 </div>
@@ -598,6 +501,10 @@ export function BreakTracker({
                 <div className="pt-2 border-t border-border/50 text-xs min-h-[38px] flex items-center">
                   {hasTakenShortBreakToday ? (
                     <span className="text-muted-foreground">Completed for today. Exactly 1 short break allowed per day.</span>
+                  ) : openBreak?.category === "short_break" ? (
+                    <span className="text-primary font-medium flex items-center gap-1.5">
+                      <Hourglass className="size-3.5 shrink-0" /> Full-screen timer active · End break to return.
+                    </span>
                   ) : !shortBreakWindow.canStart ? (
                     <span className="text-muted-foreground flex items-center gap-1.5">
                       <Clock className="size-3.5 shrink-0" /> {shortBreakWindow.reason}
@@ -611,22 +518,21 @@ export function BreakTracker({
               </div>
 
               <div className="pt-4 mt-auto">
-                <Button
-                  type="button"
-                  size="default"
-                  disabled={
-                    !checkedIn ||
-                    checkedOut ||
-                    hasTakenShortBreakToday ||
-                    !shortBreakWindow.canStart ||
-                    Boolean(openBreak) ||
-                    busy === "start-short_break"
-                  }
-                  onClick={() => handleStartFixedBreak("short_break")}
-                  className="w-full font-semibold h-10"
-                >
-                  <Play className="mr-1.5 size-4" /> Start Short Break
-                </Button>
+                <div className="rounded-lg border border-border/80 bg-muted/40 p-2.5 text-center text-xs">
+                  {hasTakenShortBreakToday ? (
+                    <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                      ✓ Short break completed for today
+                    </span>
+                  ) : openBreak?.category === "short_break" ? (
+                    <span className="font-semibold text-primary animate-pulse">
+                      ● Active (Click End Break in timer)
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      Automatically starts at <strong className="text-foreground">4:45 PM IST</strong>
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 

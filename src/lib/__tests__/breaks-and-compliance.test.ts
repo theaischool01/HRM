@@ -3,7 +3,9 @@ import {
   evaluateBreakWindow,
   calculateExpectedReturn,
   calculateBreakCompletion,
+  evaluateScheduledBreakEligibility,
   formatDurationHms,
+  formatFullHms,
   formatOvertimeHms,
   formatDurationHuman,
   formatTimeWithSecondsIst,
@@ -236,6 +238,163 @@ describe("THE AI SCHOOL HRM — Breaks & Compliance Engine", () => {
 
       expect(canApproveOwn).toBe(false);
       expect(canApproveOther).toBe(true);
+    });
+  });
+
+  describe("7. Scheduled Break Auto-Start & Server Reconciliation", () => {
+    it("Scenario 21: Checked-in employee at 1:30 PM IST auto-starts Lunch Break", () => {
+      const checkInTime = istToDate("09:15:00");
+      const currentTime = istToDate("13:30:00");
+
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(true);
+      if (res.eligible) {
+        expect(res.allowedMinutes).toBe(60);
+        expect(res.startedAtIso).toBe(istToDate("13:30:00").toISOString());
+        expect(res.expectedEndIso).toBe(istToDate("14:30:00").toISOString());
+      }
+    });
+
+    it("Scenario 22: Checked-in employee at 4:45 PM IST auto-starts Short Break", () => {
+      const checkInTime = istToDate("09:15:00");
+      const currentTime = istToDate("16:45:00");
+
+      const res = evaluateScheduledBreakEligibility("short_break", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(true);
+      if (res.eligible) {
+        expect(res.allowedMinutes).toBe(15);
+        expect(res.startedAtIso).toBe(istToDate("16:45:00").toISOString());
+        expect(res.expectedEndIso).toBe(istToDate("17:00:00").toISOString());
+      }
+    });
+
+    it("Scenario 23: Employee opens portal at 1:40 PM IST — reconciled into active lunch starting at 1:30 PM", () => {
+      const checkInTime = istToDate("09:30:00");
+      const currentTime = istToDate("13:40:00"); // 10 minutes into lunch
+
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(true);
+      if (res.eligible) {
+        expect(res.startedAtIso).toBe(istToDate("13:30:00").toISOString());
+        expect(res.expectedEndIso).toBe(istToDate("14:30:00").toISOString());
+      }
+    });
+
+    it("Scenario 24: Employee opens portal at 4:52 PM IST — reconciled into active short break starting at 4:45 PM", () => {
+      const checkInTime = istToDate("09:30:00");
+      const currentTime = istToDate("16:52:00"); // 7 minutes into short break
+
+      const res = evaluateScheduledBreakEligibility("short_break", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(true);
+      if (res.eligible) {
+        expect(res.startedAtIso).toBe(istToDate("16:45:00").toISOString());
+        expect(res.expectedEndIso).toBe(istToDate("17:00:00").toISOString());
+      }
+    });
+
+    it("Scenario 25: Absent employee (not checked in) receives no automatic break", () => {
+      const currentTime = istToDate("13:35:00");
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: null,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(false);
+      if (!res.eligible) {
+        expect(res.code).toBe("not_checked_in");
+      }
+    });
+
+    it("Scenario 26: Checked-out employee receives no automatic break", () => {
+      const checkInTime = istToDate("09:00:00");
+      const checkOutTime = istToDate("13:00:00"); // Checked out before lunch
+      const currentTime = istToDate("13:35:00");
+
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: checkInTime,
+        checkOutAt: checkOutTime,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(false);
+      if (!res.eligible) {
+        expect(res.code).toBe("already_checked_out");
+      }
+    });
+
+    it("Scenario 27: Employee checked in late at 1:45 PM IST does not get backdated lunch", () => {
+      const checkInTime = istToDate("13:45:00"); // Late check-in after lunch started
+      const currentTime = istToDate("13:50:00");
+
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(false);
+      if (!res.eligible) {
+        expect(res.code).toBe("late_checkin");
+      }
+    });
+
+    it("Scenario 28: Employee before 1:30 PM IST (e.g. 1:15 PM) is not yet due", () => {
+      const checkInTime = istToDate("09:00:00");
+      const currentTime = istToDate("13:15:00");
+
+      const res = evaluateScheduledBreakEligibility("lunch", {
+        checkInAt: checkInTime,
+        checkOutAt: null,
+        currentTime,
+        workDate: TEST_DATE,
+      });
+
+      expect(res.eligible).toBe(false);
+      if (!res.eligible) {
+        expect(res.code).toBe("not_yet_due");
+      }
+    });
+
+    it("Scenario 29: formatFullHms produces exact 2-digit HH:MM:SS matching prompt requirements", () => {
+      expect(formatFullHms(3600)).toBe("01:00:00"); // 60 mins at 1:30 PM
+      expect(formatFullHms(2700)).toBe("00:45:00"); // 45 mins at 1:45 PM
+      expect(formatFullHms(600)).toBe("00:10:00");  // 10 mins at 4:50 PM
+      expect(formatFullHms(0)).toBe("00:00:00");    // At return deadline
+    });
+
+    it("Scenario 30: Overtime counter formats exact seconds matching prompt (+00:05:32)", () => {
+      // 5 mins 32 seconds = 5 * 60 + 32 = 332 seconds
+      expect(formatOvertimeHms(332)).toBe("+00:05:32");
+      expect(formatOvertimeHms(1)).toBe("+00:00:01");
+      expect(formatOvertimeHms(60)).toBe("+00:01:00");
     });
   });
 });
